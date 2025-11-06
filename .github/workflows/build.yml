@@ -93,16 +93,11 @@ jobs:
 
       - name: Sync Skia dependencies
         run: |
-          set -x
-          set -e
           export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
-          
           cd depot_tools
           ./update_depot_tools
-          
           cd ../skia
           python3 tools/git-sync-deps
-          find . |grep reldir.txt
 
       - name: Build ${{ matrix.arch }}
         run: python3 scripts/build.py macos ${{ matrix.arch }}
