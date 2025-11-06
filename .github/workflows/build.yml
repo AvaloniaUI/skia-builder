@@ -59,13 +59,15 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "${{ github.workspace }}\depot_tools;" + $env:PATH
+          Set-Location depot_tools
+          ./update_depot_tools.bat
           Set-Location skia
-          python tools/git-sync-deps
+          ../depot_tools/python-bin/python3.bat tools/git-sync-deps
 
       - name: Build ${{ matrix.arch }}
         shell: pwsh
         run: |
-          python scripts/build.py windows ${{ matrix.arch }}
+          ../depot_tools/python-bin/python3.bat scripts/build.py windows ${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

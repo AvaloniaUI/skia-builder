@@ -145,14 +145,20 @@ def gen_linux(arch, self_contained, args):
     
     args.update({
         "skia_use_vulkan": True,
-        "skia_use_x11": False
+        "skia_use_x11": False,
+        "skia_use_system_freetype2": not self_contained,
+        "cc": "clang",
+        "cxx": "clang++",
+        "target_os": "linux",
+        "target_cpu": arch,
+        "skia_use_icu": False,
+        "skia_use_piex": True,
+        "skia_use_system_expat": False, # consider system (ABI seems to be stable)
+        "skia_use_system_libjpeg_turbo": False,
+        "skia_use_system_libpng": False,
+        "skia_use_system_libwebp": False,
+        "skia_use_system_zlib": False, # consider system  (ABI seems to be stable)
     })
-
-
-    args["cc"] = "clang"
-    args["cxx"] = "clang++"
-    args["target_os"] = "linux"
-    args["target_cpu"] = arch
     args["extra_cflags"].extend([
         "--target=" + llvm_target,
         "--sysroot=/sysroots/" + llvm_target
@@ -219,16 +225,7 @@ def build_target(target_os, arch, self_contained, debug):
         "extra_cflags_cc": [],
         "extra_ldflags": [],
         "skia_enable_skottie": True,
-        "skia_use_harfbuzz": False,
-        "skia_use_icu": False,
-        "skia_use_piex": True,
-        "skia_use_system_expat": False,
-        "skia_use_system_freetype2": False,
-        "skia_use_system_libjpeg_turbo": False,
-        "skia_use_system_libpng": False,
-        "skia_use_system_libwebp": False,
-        "skia_use_system_zlib": False,
-        
+        "skia_use_harfbuzz": False,        
     }
 
     if canonical_os == "linux":
