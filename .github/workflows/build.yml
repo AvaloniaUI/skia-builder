@@ -1,0 +1,91 @@
+name: Build Skia Artifacts
+
+on:
+  push:
+    branches:
+      - *
+  pull_request:
+
+jobs:
+  headers:
+    name: Headers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync Skia dependencies
+        run: |
+          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
+          cd skia
+          python3 tools/git-sync-deps
+
+      - name: Build headers
+        run: python3 scripts/build.py headers
+
+      - name: Upload headers
+        uses: actions/upload-artifact@v4
+        with:
+          name: headers
+          path: artifacts/headers
+
+  windows:
+    name: Windows (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync Skia dependencies
+        shell: pwsh
+        run: |
+          $env:PATH = "${{ github.workspace }}\depot_tools;" + $env:PATH
+          Set-Location skia
+          python tools/git-sync-deps
+
+      - name: Build ${{ matrix.arch }}
+        shell: pwsh
+        run: |
+          python scripts/build.py windows ${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: artifacts/windows_${{ matrix.arch }}
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync Skia dependencies
+        run: |
+          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
+          cd skia
+          python3 tools/git-sync-deps
+
+      - name: Build ${{ matrix.arch }}
+        run: python3 scripts/build.py macos ${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: artifacts/macos_${{ matrix.arch }}
