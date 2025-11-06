@@ -6,6 +6,16 @@ import shutil
 import subprocess
 import sys
 
+
+TARGET_OS_CANONICAL = {
+    "linux": "linux",
+    "mac": "macos",
+    "macos": "macos",
+    "darwin": "macos",
+    "win": "windows",
+    "windows": "windows",
+}
+
 def has_env_flag(name):
     return os.environ.get(name, "0") == "1"
 
@@ -75,8 +85,19 @@ def copy_headers():
     artifacts_dir = os.path.join("..", "artifacts", "headers")
     for skiaDir in ["include", "modules", "src"]:
         copy_includes(skiaDir, os.path.join(artifacts_dir, skiaDir))
-    
-    
+
+
+def _ensure_arch_supported(target_os, arch):
+    supported = {
+        "linux": {"x64", "arm64", "arm"},
+        "macos": {"x64", "arm64"},
+        "windows": {"x64", "arm64"},
+    }
+
+    if arch not in supported.get(target_os, set()):
+        raise ValueError(f"Unsupported architecture {arch} for {target_os}")
+
+
 def collect_defines(path):
     lines = read_all_lines(path)
     defines = []
@@ -123,16 +144,6 @@ def gen_linux(arch, self_contained, args):
     llvm_target = llvm_arch + "-linux-gnu"
     
     args.update({
-        "skia_use_harfbuzz": False,
-        "skia_use_icu": False,
-        "skia_use_piex": True,
-        # "skia_use_sfntly": False, Not supported anymore
-        "skia_use_system_expat": False,
-        "skia_use_system_freetype2": False,
-        "skia_use_system_libjpeg_turbo": False,
-        "skia_use_system_libpng": False,
-        "skia_use_system_libwebp": False,
-        "skia_use_system_zlib": False,
         "skia_use_vulkan": True,
         "skia_use_x11": False
     })
@@ -162,7 +173,28 @@ def gen_linux(arch, self_contained, args):
         "-lc"
     ])
     
-    
+
+def gen_macos(arch, self_contained, args):
+    _ensure_arch_supported("macos", arch)
+
+    args.update({
+        "skia_use_vulkan": False,
+        "skia_use_metal": True,
+        "target_os": "mac",
+        "target_cpu": arch,
+    })
+
+
+def gen_windows(arch, self_contained, args):
+    _ensure_arch_supported("windows", arch)
+
+    args.update({
+        "skia_use_vulkan": True,
+        "target_os": "win",
+        "target_cpu": arch,
+        "clang_win" : "C:/Program Files/LLVM"
+    })
+
 def build_target(target_os, arch, self_contained, debug):
     output_name = f"{target_os}_{arch}"
     if debug:
@@ -170,6 +202,13 @@ def build_target(target_os, arch, self_contained, debug):
     gn_dir = os.path.join("out", output_name)
     artifacts_dir = os.path.join("..", "artifacts", output_name)
     
+    canonical_os = TARGET_OS_CANONICAL.get(target_os)
+    if canonical_os is None:
+        print(f"Unsupported target OS: {target_os}", file=sys.stderr)
+        sys.exit(1)
+
+    _ensure_arch_supported(canonical_os, arch)
+
     args = {
         "is_debug": debug,
         "is_official_build": not debug,
@@ -180,11 +219,26 @@ def build_target(target_os, arch, self_contained, debug):
         "extra_cflags_cc": [],
         "extra_ldflags": [],
         "skia_enable_skottie": True,
+        "skia_use_harfbuzz": False,
+        "skia_use_icu": False,
+        "skia_use_piex": True,
+        "skia_use_system_expat": False,
+        "skia_use_system_freetype2": False,
+        "skia_use_system_libjpeg_turbo": False,
+        "skia_use_system_libpng": False,
+        "skia_use_system_libwebp": False,
+        "skia_use_system_zlib": False,
+        
     }
-    if target_os == "linux":
+
+    if canonical_os == "linux":
         gen_linux(arch, self_contained, args)
+    elif canonical_os == "macos":
+        gen_macos(arch, self_contained, args)
+    elif canonical_os == "windows":
+        gen_windows(arch, self_contained, args)
     else:
-        print(f"Unsupported target OS: {target_os}", file=sys.stderr)
+        print(f"Unsupported target OS: {canonical_os}", file=sys.stderr)
         sys.exit(1)
         
     os.makedirs(gn_dir, exist_ok=True)

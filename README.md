@@ -22,6 +22,14 @@ Run `./scripts/build.py headers`
 
 Run `./scripts/build-linux.sh <arch>`, where `arch` is `x64`, `arm64` or `all`
 
+### macOS & Windows
+
+Run `./scripts/build.py <os> <arch> [--self-contained] [--debug]`, where:
+
+- `<os>` is `macos`, `darwin`, `mac`, `windows`, or `win`
+- `<arch>` is `x64`, `arm64`, or `all`
+- `--debug` produces a debug build (defaults to release)
+
 ## Usage
 
 The scripts will produce a Skia build with static libraries in `artifacts/<os>_<arch>` with `skia.h` specific for that
