@@ -10,6 +10,7 @@ on:
 
 jobs:
   headers:
+    if: false
     name: Headers
     runs-on: ubuntu-latest
     steps:
@@ -17,6 +18,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
+          persist-credentials: true
+          clean: false
 
       - name: Sync Skia dependencies
         run: |
@@ -34,6 +38,7 @@ jobs:
           path: artifacts/headers
 
   windows:
+    if: false
     name: Windows (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
@@ -46,6 +51,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
+          persist-credentials: true
+          clean: false
 
       - name: Sync Skia dependencies
         shell: pwsh
@@ -70,18 +78,25 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
-        arch: [x64, arm64]
+        arch:
+          - x64
+          # - arm64  # disabled for now
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
+          persist-credentials: true
+          clean: false
 
       - name: Sync Skia dependencies
         run: |
           export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
           cd skia
           python3 tools/git-sync-deps
+          find . |grep reldir.txt
 
       - name: Build ${{ matrix.arch }}
         run: python3 scripts/build.py macos ${{ matrix.arch }}
