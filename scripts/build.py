@@ -188,7 +188,24 @@ def gen_macos(arch, self_contained, args):
         "skia_use_metal": True,
         "target_os": "mac",
         "target_cpu": arch,
+        "skia_use_icu": False,
+        "skia_use_piex": True,
+        "skia_use_sfntly": False,
+        "skia_use_system_expat": False,
+        "skia_use_system_libjpeg_turbo": False,
+        "skia_use_system_libpng": False,
+        "skia_use_system_libwebp": False,
+        "skia_use_system_zlib": False,
     })
+
+    args["extra_cflags"].extend([
+        "-DSKIA_C_DLL",
+        "-DHAVE_ARC4RANDOM_BUF",
+        "-stdlib=libc++",
+    ])
+    args["extra_ldflags"].extend([
+        "-stdlib=libc++",
+    ])
 
 
 def gen_windows(arch, self_contained, args):
@@ -198,8 +215,33 @@ def gen_windows(arch, self_contained, args):
         "skia_use_vulkan": True,
         "target_os": "win",
         "target_cpu": arch,
-        "clang_win" : "C:/Program Files/LLVM"
+        "clang_win" : "C:/Program Files/LLVM",
+        "skia_enable_fontmgr_win_gdi": False,
+        "skia_use_dng_sdk": True,
+        "skia_use_icu": False,
+        "skia_use_piex": True,
+        "skia_use_sfntly": False,
+        "skia_use_system_expat": False,
+        "skia_use_system_libjpeg_turbo": False,
+        "skia_use_system_libpng": False,
+        "skia_use_system_libwebp": False,
+        "skia_use_system_zlib": False,
+        "skia_use_direct3d": True,
     })
+
+    mt_flag = "/MTd" if args.get("is_debug") else "/MT"
+    args["extra_cflags"].extend([
+        mt_flag,
+        "/EHsc",
+        "/Z7",
+        "/guard:cf",
+        "-D_HAS_AUTO_PTR_ETC=1",
+    ])
+    args["extra_ldflags"].extend([
+        "/DEBUG:FULL",
+        "/DEBUGTYPE:CV,FIXUP",
+        "/guard:cf",
+    ])
 
 def build_target(target_os, arch, self_contained, debug):
     output_name = f"{target_os}_{arch}"

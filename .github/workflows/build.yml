@@ -38,12 +38,13 @@ jobs:
           path: artifacts/headers
 
   windows:
-    if: false
     name: Windows (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [x64, arm64]
+        arch:
+          - x64
+          #- arm64
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
     steps:
