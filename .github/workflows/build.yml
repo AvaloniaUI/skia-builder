@@ -73,6 +73,12 @@ jobs:
   linux:
     name: Linux
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64, arm]
+    env:
+      CLANG_BUILDER_IMAGE: ghcr.io/avaloniaui/clang-cross-builder:latest
     steps:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -96,18 +102,15 @@ jobs:
           ./update_depot_tools
           cd ../skia
           python3 tools/git-sync-deps
-      - name: Build (all arches)
-        env:
-          CLANG_BUILDER_IMAGE: ghcr.io/avaloniaui/clang-cross-builder:latest
+
+      - name: Build (arch)
         run: |
-          scripts/build-linux.sh x64  
-          scripts/build-linux.sh arm64  
-          scripts/build-linux.sh arm  
+          scripts/build-linux.sh ${{ matrix.arch }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-all
+          name: linux-${{ matrix.arch }}
           path: artifacts/*
 
   macos:
