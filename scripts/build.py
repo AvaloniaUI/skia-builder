@@ -83,7 +83,7 @@ def copy_includes(src_dir, dest_dir):
 
 def copy_headers():
     artifacts_dir = os.path.join("..", "artifacts", "headers")
-    for skiaDir in ["include", "modules", "src"]:
+    for skiaDir in ["include", "modules", "src", "gpu"]:
         copy_includes(skiaDir, os.path.join(artifacts_dir, skiaDir))
 
 
@@ -176,6 +176,8 @@ def gen_linux(arch, self_contained, args):
         "-lm",
         "-lc"
     ])
+    if(args["skia_use_dawn"]):
+        args["dawn_use_x11"] = False
     if arch == "arm":
         args["extra_cflags"].extend([
             "-mfloat-abi=hard",
@@ -261,10 +263,13 @@ def build_target(target_os, arch, self_contained, debug):
         "skia_enable_tools": False,
         "extra_cflags": ["-ffunction-sections", "-fdata-sections", "-fno-rtti"],
         "extra_cflags_c": [],
-        "extra_cflags_cc": [],
+        "extra_cflags_cc": ["-std=c++20", "-fno-exceptions"],
         "extra_ldflags": [],
         "skia_enable_skottie": True,
-        "skia_use_harfbuzz": False,        
+        "skia_use_harfbuzz": False,
+        "skia_enable_ganesh": True,
+        "skia_enable_graphite": True,
+        "skia_use_dawn": True,
     }
 
     if canonical_os == "linux":
