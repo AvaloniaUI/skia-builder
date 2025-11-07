@@ -285,7 +285,12 @@ def build_target(target_os, arch, self_contained, debug):
     write_file(os.path.join(gn_dir, "args.gn"), dict_to_gn(args))
     
     if not has_env_flag("DEBUG_SKIP_BUILD"):
-        subprocess.run(['gn', 'gen', gn_dir], check = True)
+        # On Windows, prefer the gn.bat inside depot_tools to ensure batch wrapper is used.
+        if os.name == "nt" or sys.platform.startswith("win"):
+            gn_cmd = "../depot_tools/gn.bat"
+        else:
+            gn_cmd = "gn"
+        subprocess.run([gn_cmd, 'gen', gn_dir], check = True)
         subprocess.run(['ninja', '-C', gn_dir], check = True)
 
 
@@ -327,8 +332,7 @@ def main():
     debug = "--debug" in args
 
     # prepend ./depot_tools to PATH
-    depot_tools_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "depot_tools"))
-    os.environ["PATH"] = depot_tools_path + os.pathsep + os.environ.get("PATH", "")
+    os.environ["PATH"] = DEPOT_TOOLS_PATH + os.pathsep + os.environ.get("PATH", "")
 
 
 

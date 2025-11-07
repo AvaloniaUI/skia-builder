@@ -1,9 +1,5 @@
 name: Build Skia Artifacts
 
-permissions:
-  contents: read
-  packages: read
-
 on:
   push:
     branches:
@@ -78,11 +74,6 @@ jobs:
   linux-all:
     name: Linux (all)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/avaloniaui/clang-cross-builder:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
