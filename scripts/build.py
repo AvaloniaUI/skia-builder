@@ -331,9 +331,9 @@ def main():
     self_contained = "--self-contained" in args
     debug = "--debug" in args
 
-    # prepend ./depot_tools to PATH
-    os.environ["PATH"] = DEPOT_TOOLS_PATH + os.pathsep + os.environ.get("PATH", "")
-
+    # prepend ../depot_tools to PATH
+    depot_tools_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "depot_tools"))
+    os.environ["PATH"] = depot_tools_path + os.pathsep + os.environ.get("PATH", "")
 
 
     if arch == "all":

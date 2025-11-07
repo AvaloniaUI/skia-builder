@@ -9,7 +9,7 @@ cd ..
 #   SKIA_BUILD_IMAGE=myrepo/custom-image:tag ./scripts/build-linux.sh x64
 IMAGE="${CLANG_BUILDER_IMAGE:-clang-cross-builder}"
 
-docker run --rm -it \
+docker run --rm \
     -u "$(id -u)":"$(id -g)" \
     -v "$(pwd)":"$(pwd)" \
     -w "$(pwd)" \
