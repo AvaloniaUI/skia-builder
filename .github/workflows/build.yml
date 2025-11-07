@@ -76,6 +76,38 @@ jobs:
           name: windows-${{ matrix.arch }}
           path: artifacts/windows_${{ matrix.arch }}
 
+  linux-all:
+    name: Linux (all)
+    runs-on: ubuntu-latest
+    container: ghcr.io/avaloniaui/clang-cross-builder:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: true
+          clean: false
+
+      - name: Sync Skia dependencies
+        run: |
+          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
+          cd depot_tools
+          ./update_depot_tools
+          cd ../skia
+          python3 tools/git-sync-deps
+
+      - name: Build (all arches)
+        env:
+          CLANG_BUILDER_IMAGE: ghcr.io/avaloniaui/clang-cross-builder:latest
+        run: scripts/build-linux.sh all
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-all
+          path: artifacts/linux_*
+
   macos:
     name: macOS (${{ matrix.arch }})
     runs-on: macos-latest
