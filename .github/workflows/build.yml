@@ -130,7 +130,7 @@ jobs:
           path: artifacts
 
       - name: Generate release id
-        run: ./genrelease.sh
+        run: /scripts/genrelease.sh
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
