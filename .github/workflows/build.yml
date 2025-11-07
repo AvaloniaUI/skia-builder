@@ -39,6 +39,10 @@ jobs:
   windows:
     name: Windows
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
     steps:
@@ -59,15 +63,15 @@ jobs:
           Set-Location ../skia
           ../depot_tools/python-bin/python3.bat tools/git-sync-deps
 
-      - name: Build
+      - name: Build (${{ matrix.arch }})
         shell: pwsh
         run: |
-          depot_tools/python-bin/python3.bat scripts/build.py windows all
+          depot_tools/python-bin/python3.bat scripts/build.py windows ${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-all
+          name: windows-${{ matrix.arch }}
           path: artifacts/*
 
   linux:
