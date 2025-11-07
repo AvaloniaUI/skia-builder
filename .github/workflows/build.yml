@@ -9,6 +9,33 @@ on:
       - '**'
 
 jobs:
+  headers:
+    name: Headers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: true
+          clean: false
+
+      - name: Sync Skia dependencies
+        run: |
+          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
+          cd depot_tools
+          ./update_depot_tools
+          cd ../skia
+          python3 tools/git-sync-deps
+      - name: Extract headers
+        run: python3 scripts/build.py headers
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: headers
+          path: artifacts/*
+  
   windows:
     name: Windows
     runs-on: windows-latest
@@ -44,7 +71,7 @@ jobs:
           path: artifacts/*
 
   linux:
-    name: Linux (all)
+    name: Linux
     runs-on: ubuntu-latest
     steps:
       - name: Log in to GitHub Container Registry
@@ -69,12 +96,13 @@ jobs:
           ./update_depot_tools
           cd ../skia
           python3 tools/git-sync-deps
-      - name: Extract headers
-        run: python3 scripts/build.py headers
       - name: Build (all arches)
         env:
           CLANG_BUILDER_IMAGE: ghcr.io/avaloniaui/clang-cross-builder:latest
-        run: scripts/build-linux.sh all  
+        run: |
+          scripts/build-linux.sh x64  
+          scripts/build-linux.sh arm64  
+          scripts/build-linux.sh arm  
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -115,7 +143,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, headers]
     if: github.event_name == 'push'
     permissions:
       contents: write
