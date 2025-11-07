@@ -133,15 +133,13 @@ def gen_linux(arch, self_contained, args):
 
     # normalize to LLVM-style arch names
     if arch == "x64":
-        llvm_arch = "x86_64"
+        llvm_target = "x86_64-linux-gnu"
     elif arch == "arm64":
-        llvm_arch = "aarch64"
+        llvm_target = "aarch64-linux-gnu"
     elif arch == "arm":
-        llvm_arch = "armv7a"
+        llvm_target = "arm-linux-gnueabihf"
     else:
         raise ValueError(f"Unsupported architecture: {arch}")
-
-    llvm_target = llvm_arch + "-linux-gnu"
     
     args.update({
         "skia_use_vulkan": True,
@@ -178,6 +176,11 @@ def gen_linux(arch, self_contained, args):
         "-lm",
         "-lc"
     ])
+    if arch == "arm":
+        args["extra_cflags"].extend([
+            "-mfloat-abi=hard",
+            "-mfpu=neon",
+        ])
     
 
 def gen_macos(arch, self_contained, args):

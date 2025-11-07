@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
+        arch: [x64, arm64, arm]
     env:
       CLANG_BUILDER_IMAGE: ghcr.io/avaloniaui/clang-cross-builder:latest
     steps:
