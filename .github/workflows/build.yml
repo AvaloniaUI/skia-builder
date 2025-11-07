@@ -60,7 +60,7 @@ jobs:
           Set-Location ../skia
           ../depot_tools/python-bin/python3.bat tools/git-sync-deps
 
-      - name: Build ${{ matrix.arch }}
+      - name: Build
         shell: pwsh
         run: |
           depot_tools/python-bin/python3.bat scripts/build.py windows all

@@ -200,11 +200,7 @@ def gen_macos(arch, self_contained, args):
 
     args["extra_cflags"].extend([
         "-DSKIA_C_DLL",
-        "-DHAVE_ARC4RANDOM_BUF",
-        "-stdlib=libc++",
-    ])
-    args["extra_ldflags"].extend([
-        "-stdlib=libc++",
+        "-DHAVE_ARC4RANDOM_BUF"
     ])
 
 
@@ -287,7 +283,7 @@ def build_target(target_os, arch, self_contained, debug):
     if not has_env_flag("DEBUG_SKIP_BUILD"):
         # On Windows, prefer the gn.bat inside depot_tools to ensure batch wrapper is used.
         if os.name == "nt" or sys.platform.startswith("win"):
-            gn_cmd = "../depot_tools/gn.bat"
+            gn_cmd = os.path.abspath(os.path.join("..", "depot_tools", "gn.bat"))
         else:
             gn_cmd = "gn"
         subprocess.run([gn_cmd, 'gen', gn_dir], check = True)
