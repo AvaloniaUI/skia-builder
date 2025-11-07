@@ -153,6 +153,7 @@ def gen_linux(arch, self_contained, args):
         "target_cpu": arch,
         "skia_use_icu": False,
         "skia_use_piex": True,
+        "skia_use_sfntly": False,
         "skia_use_system_expat": False, # consider system (ABI seems to be stable)
         "skia_use_system_libjpeg_turbo": False,
         "skia_use_system_libpng": False,
@@ -190,7 +191,6 @@ def gen_macos(arch, self_contained, args):
         "target_cpu": arch,
         "skia_use_icu": False,
         "skia_use_piex": True,
-        "skia_use_sfntly": False,
         "skia_use_system_expat": False,
         "skia_use_system_libjpeg_turbo": False,
         "skia_use_system_libpng": False,

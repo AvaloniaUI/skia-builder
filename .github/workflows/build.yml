@@ -1,5 +1,8 @@
 name: Build Skia Artifacts
 
+permissions:
+  packages: read
+
 on:
   push:
     branches:
@@ -62,7 +65,7 @@ jobs:
           $env:PATH = "${{ github.workspace }}\depot_tools;" + $env:PATH
           Set-Location depot_tools
           ./update_depot_tools.bat
-          Set-Location skia
+          Set-Location ../skia
           ../depot_tools/python-bin/python3.bat tools/git-sync-deps
 
       - name: Build ${{ matrix.arch }}
@@ -79,7 +82,11 @@ jobs:
   linux-all:
     name: Linux (all)
     runs-on: ubuntu-latest
-    container: ghcr.io/avaloniaui/clang-cross-builder:latest
+    container:
+      image: ghcr.io/avaloniaui/clang-cross-builder:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
