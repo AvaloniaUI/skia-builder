@@ -18,13 +18,6 @@ jobs:
     name: Headers
     runs-on: ubuntu-latest
     steps:
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -49,13 +42,8 @@ jobs:
           path: artifacts/headers
 
   windows:
-    name: Windows (${{ matrix.arch }})
+    name: Windows
     runs-on: windows-latest
-    strategy:
-      matrix:
-        arch:
-          - x64
-          #- arm64
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
     steps:
@@ -79,13 +67,13 @@ jobs:
       - name: Build ${{ matrix.arch }}
         shell: pwsh
         run: |
-          ../depot_tools/python-bin/python3.bat scripts/build.py windows ${{ matrix.arch }}
+          depot_tools/python-bin/python3.bat scripts/build.py windows all
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.arch }}
-          path: artifacts/windows_${{ matrix.arch }}
+          name: windows-all
+          path: artifacts/*
 
   linux-all:
     name: Linux (all)
@@ -96,6 +84,13 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -124,13 +119,8 @@ jobs:
           path: artifacts/linux_*
 
   macos:
-    name: macOS (${{ matrix.arch }})
+    name: macOS
     runs-on: macos-latest
-    strategy:
-      matrix:
-        arch:
-          - x64
-          # - arm64  # disabled for now
 
     steps:
       - name: Checkout
@@ -149,11 +139,11 @@ jobs:
           cd ../skia
           python3 tools/git-sync-deps
 
-      - name: Build ${{ matrix.arch }}
-        run: python3 scripts/build.py macos ${{ matrix.arch }}
+      - name: Build 
+        run: python3 scripts/build.py macos all
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
-          path: artifacts/macos_${{ matrix.arch }}
+          name: macos-all
+          path: artifacts/*
