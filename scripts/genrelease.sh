@@ -8,5 +8,8 @@ echo "Build for commit https://github.com/google/skia/commit/$SKIA_COMMIT" > rel
 RUN_NUMBER="${GITHUB_RUN_NUMBER:-local}"
 echo "RELEASE_ID=sk_${SKIA_COMMIT}_${RUN_NUMBER}" >> $GITHUB_ENV
 
-mkdir files
-tar -czf
+find artifacts
+mkdir files skia_sdk
+mv artifacts/*/* skia_sdk
+
+tar -czf release/skia_sdk.tar.gz skia_sdk

@@ -127,7 +127,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: skia_sdk
+          path: artifacts
 
       - name: Generate release id
         run: ./genrelease.sh
