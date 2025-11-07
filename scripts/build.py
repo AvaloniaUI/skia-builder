@@ -146,7 +146,7 @@ def gen_linux(arch, self_contained, args):
     args.update({
         "skia_use_vulkan": True,
         "skia_use_x11": False,
-        "skia_use_system_freetype2": not self_contained,
+        "skia_use_system_freetype2": False,
         "cc": "clang",
         "cxx": "clang++",
         "target_os": "linux",
