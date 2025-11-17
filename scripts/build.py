@@ -85,6 +85,7 @@ def copy_headers():
     artifacts_dir = os.path.join("..", "artifacts", "headers")
     for skiaDir in ["include", "modules", "src", "gpu"]:
         copy_includes(skiaDir, os.path.join(artifacts_dir, skiaDir))
+    copy_includes(os.path.join("third_party", "externals", "dawn", "include"), artifacts_dir)
 
 
 def _ensure_arch_supported(target_os, arch):
@@ -141,12 +142,17 @@ def gen_linux(arch, self_contained, args):
     else:
         raise ValueError(f"Unsupported architecture: {arch}")
     
+    clang_suffix = os.environ.get("SKIA_BUILDER_CLANG_SUFFIX", "")
+    sysroots_prefix = os.environ.get("SKIA_BUILDER_SYSROOTS_PREFIX", "")
+    sysroot_arg = "--sysroot=" + sysroots_prefix + "/sysroots/" + llvm_target
+    print(sysroot_arg)
+    
     args.update({
         "skia_use_vulkan": True,
         "skia_use_x11": False,
         "skia_use_system_freetype2": False,
-        "cc": "clang",
-        "cxx": "clang++",
+        "cc": "clang" + clang_suffix,
+        "cxx": "clang++" + clang_suffix,
         "target_os": "linux",
         "target_cpu": arch,
         "skia_use_icu": False,
@@ -159,13 +165,14 @@ def gen_linux(arch, self_contained, args):
     })
     args["extra_cflags"].extend([
         "--target=" + llvm_target,
-        "--sysroot=/sysroots/" + llvm_target
+        sysroot_arg
     ])
     args["extra_cflags_cc"].extend([
         "-stdlib=libc++"
     ])
     args["extra_ldflags"].extend([
-        "--target=" + llvm_target, "--sysroot=/sysroots/" + llvm_target,
+        "--target=" + llvm_target,
+        sysroot_arg,
         "-rtlib=compiler-rt",
         "-stdlib=libc++",
         "-rtlib=compiler-rt",
@@ -293,7 +300,8 @@ def build_target(target_os, arch, self_contained, debug):
         else:
             gn_cmd = "gn"
         subprocess.run([gn_cmd, 'gen', gn_dir], check = True)
-        subprocess.run(['ninja', '-C', gn_dir], check = True)
+        if not has_env_flag("DEBUG_SKIP_NINJA"):
+            subprocess.run(['ninja', '-C', gn_dir], check = True)
 
 
     # recursively clear artifacts dir
@@ -308,9 +316,16 @@ def build_target(target_os, arch, self_contained, debug):
     copy_extension(gn_dir, lib_dir, ".a")
     copy_extension(gn_dir, lib_dir, ".lib")
     
-    write_file(os.path.join(artifacts_dir, "skia.h"), generate_skia_h(gn_dir))
+    headers_dir = os.path.join(artifacts_dir, "headers")
+    # check if exists
+    if os.path.exists(headers_dir):
+        os.removedirs(headers_dir)
+    
+    os.makedirs(headers_dir, exist_ok=True)
+    write_file(os.path.join(headers_dir, "skia.h"), generate_skia_h(gn_dir))
     if has_env_flag("SKIA_BUILDER_SAVE_SPACE"):
         shutil.rmtree(gn_dir)
+    copy_includes(os.path.join(gn_dir, "gen", "third_party", "externals", "dawn", "include"), headers_dir)
     
 def main():
     argv = sys.argv[1:]
