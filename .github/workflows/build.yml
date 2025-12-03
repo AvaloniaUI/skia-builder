@@ -8,6 +8,10 @@ on:
     branches:
       - '**'
 
+env:
+  # Set to "true" to enable Graphite (adds --graphite to build commands)
+  GRAPHITE: "false"
+
 jobs:
   headers:
     name: Headers
@@ -66,7 +70,7 @@ jobs:
       - name: Build (${{ matrix.arch }})
         shell: pwsh
         run: |
-          depot_tools/python-bin/python3.bat scripts/build.py windows ${{ matrix.arch }}
+          depot_tools/python-bin/python3.bat scripts/build.py windows ${{ matrix.arch }} ${{ env.GRAPHITE == 'true' && '--graphite' || '' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -109,7 +113,7 @@ jobs:
 
       - name: Build (arch)
         run: |
-          scripts/build-linux.sh ${{ matrix.arch }}
+          scripts/build-linux.sh ${{ matrix.arch }} ${{ env.GRAPHITE == 'true' && '--graphite' || '' }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -139,7 +143,7 @@ jobs:
           python3 tools/git-sync-deps
 
       - name: Build 
-        run: python3 scripts/build.py macos all
+        run: python3 scripts/build.py macos all ${{ env.GRAPHITE == 'true' && '--graphite' || '' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

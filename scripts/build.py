@@ -249,7 +249,7 @@ def gen_windows(arch, self_contained, args):
         "/guard:cf",
     ])
 
-def build_target(target_os, arch, self_contained, debug):
+def build_target(target_os, arch, self_contained, debug, graphite):
     output_name = f"{target_os}_{arch}"
     if debug:
         output_name += "_debug"
@@ -275,8 +275,9 @@ def build_target(target_os, arch, self_contained, debug):
         "skia_enable_skottie": True,
         "skia_use_harfbuzz": False,
         "skia_enable_ganesh": True,
-        "skia_enable_graphite": True,
-        "skia_use_dawn": True,
+        # Controlled by --graphite flag (default: False)
+        "skia_enable_graphite": bool(graphite),
+        "skia_use_dawn": bool(graphite),
     }
 
     if canonical_os == "linux":
@@ -347,6 +348,7 @@ def main():
     args = argv[2:]
     self_contained = "--self-contained" in args
     debug = "--debug" in args
+    graphite = "--graphite" in args
 
     # prepend ../depot_tools to PATH
     depot_tools_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "depot_tools"))
@@ -355,9 +357,9 @@ def main():
 
     if arch == "all":
         for a in ["x64", "arm64"]:
-            build_target(target_os, a, self_contained, debug)
+            build_target(target_os, a, self_contained, debug, graphite)
     else:        
-        build_target(target_os, arch, self_contained, debug)
+        build_target(target_os, arch, self_contained, debug, graphite)
 
 if __name__ == "__main__":
     main()
