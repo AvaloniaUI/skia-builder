@@ -14,3 +14,4 @@ mv artifacts/*/* skia_sdk
 
 echo -n ${RELEASE_IDENTIFIER} > skia_sdk/RELEASE_ID.txt
 tar -czf release/skia_sdk.tar.gz skia_sdk
+echo -n `cat /tmp/wat.c|md5sum|awk '{print $1}' ` > release/skia_sdk.tar.gz.md5sum
