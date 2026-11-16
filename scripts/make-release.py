@@ -5,7 +5,8 @@
 
 manifest.json lists each archive by RID (linux-x64, windows-arm64, android-arm64, ...) with its name, size and
 SHA-256. WebAssembly archives are keyed browser-wasm-emscripten-<version>: a static library links only with the
-Emscripten version that built it.
+Emscripten version that built it. iOS, tvOS and Mac Catalyst archives hold XCFrameworks and are keyed ios, tvos and
+maccatalyst.
 """
 
 import argparse
@@ -45,13 +46,16 @@ def main():
         prefix = f"skia-{re.escape(args.tag)}-"
         native = re.fullmatch(prefix + r"(linux|macos|windows|android)-(x64|arm64)\.tar\.gz", archive.name)
         wasm = re.fullmatch(prefix + r"wasm-emscripten-([0-9][0-9.]*[0-9])\.tar\.gz", archive.name)
-        if not native and not wasm:
+        apple = re.fullmatch(prefix + r"(ios|tvos|maccatalyst)\.tar\.gz", archive.name)
+        if not native and not wasm and not apple:
             sys.exit(f"Unexpected archive name {archive.name}")
         digest = sha256(archive)
         sums.append(f"{digest}  {archive.name}")
         entry = {"name": archive.name, "size": archive.stat().st_size, "sha256": digest}
         if native:
             assets[f"{RIDS[native.group(1)]}-{native.group(2)}"] = entry
+        elif apple:
+            assets[apple.group(1)] = dict(entry, xcframework=True)
         else:
             assets[f"browser-wasm-emscripten-{wasm.group(1)}"] = dict(entry, emscripten=wasm.group(1))
 

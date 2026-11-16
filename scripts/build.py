@@ -4,8 +4,9 @@
   build.py <os> <arch> [--tag TAG]
   build.py android <arm64|x64> --ndk <path>                         (or ANDROID_NDK_HOME)
   build.py wasm wasm32 --emscripten toolchains/emscripten-<band>     (see fetch-emscripten.py)
+  build.py <ios|ios-simulator|tvos|tvos-simulator|maccatalyst> <arch> --no-archive   (see package-apple.py)
 
-<os> is linux, macos, windows, android or wasm. The archive is release/skia-<TAG>-<platform>.tar.gz, where the
+<os> is linux, macos, windows, android, wasm, or an Apple mobile slice (packaged by package-apple.py). The archive is release/skia-<TAG>-<platform>.tar.gz, where the
 platform is <os>-<arch>, or wasm-emscripten-<version> for WebAssembly. It holds the headers (include, modules, src
 and the third-party headers they use), the static libraries in out/Release-<platform>, that directory's args.gn and
 defines.txt, and build-info.json.
@@ -15,6 +16,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -31,7 +33,14 @@ ARCHES = {
     "windows": {"x64", "arm64"},
     "android": {"x64", "arm64"},
     "wasm": {"wasm32"},
+    "ios": {"arm64"},
+    "ios-simulator": {"arm64", "x64"},
+    "tvos": {"arm64"},
+    "tvos-simulator": {"arm64", "x64"},
+    "maccatalyst": {"arm64", "x64"},
 }
+
+APPLE_MIN_VERSION = "15.0"
 
 ANDROID_API = 24
 
@@ -58,7 +67,6 @@ COMMON_ARGS = {
     "skia_use_harfbuzz": True,
     "skia_pdf_subset_harfbuzz": True,
     "skia_use_system_expat": False,
-    "skia_use_system_freetype2": False,
     "skia_use_system_harfbuzz": False,
     "skia_use_system_icu": False,
     "skia_use_system_libjpeg_turbo": False,
@@ -72,6 +80,8 @@ DEFINE_TARGETS = [
     "//:skia", "//modules/skparagraph:skparagraph", "//modules/skottie:skottie", "//modules/svg:svg",
     "//modules/skshaper:skshaper", "//modules/skunicode:skunicode_icu",
 ]
+
+DEFINE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(=\S*)?")
 
 # Headers outside include/, modules/ and src/ that public headers include.
 THIRD_PARTY_HEADERS = [
@@ -90,6 +100,7 @@ def linux_args(arch):
         "cc": cc,
         "cxx": cxx,
         "skia_use_vulkan": True,
+        "skia_use_system_freetype2": False,
         "extra_cflags": ["-ffunction-sections", "-fdata-sections"],
         "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
     }
@@ -132,6 +143,7 @@ def android_args(arch, ndk):
         "ndk": ndk,
         "ndk_api": ANDROID_API,
         "skia_use_vulkan": True,
+        "skia_use_system_freetype2": False,
         "extra_cflags": ["-ffunction-sections", "-fdata-sections"],
         "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
     }
@@ -152,6 +164,7 @@ def wasm_args(emsdk_dir):
         "skia_use_angle": False,
         "skia_use_fontconfig": False,
         "skia_use_freetype": True,
+        "skia_use_system_freetype2": False,
         "skia_use_expat": True,
         "skia_use_libwebp_encode": True,
         "skia_use_piex": False,
@@ -160,6 +173,42 @@ def wasm_args(emsdk_dir):
         "extra_cflags": ["-msimd128", "-ffunction-sections", "-fdata-sections"],
         "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
     }
+
+
+def apple_args(slice_os, arch):
+    """iOS, tvOS and Mac Catalyst slices: Metal only (Ganesh and Graphite)."""
+    simulator = slice_os.endswith("-simulator")
+    platform = slice_os.removesuffix("-simulator")
+    args = {
+        "target_cpu": arch,
+        "ios_use_simulator": simulator,
+        "skia_use_metal": True,
+        "skia_use_gl": False,
+        "skia_use_vulkan": False,
+        "extra_cflags": ["-ffunction-sections", "-fdata-sections", "-DHAVE_ARC4RANDOM_BUF"],
+        "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
+        "extra_asmflags": [],
+        "extra_ldflags": [],
+    }
+    if platform == "ios":
+        args.update({"target_os": "ios", "ios_min_target": APPLE_MIN_VERSION})
+        return args
+    if platform == "tvos":
+        # ios_min_target always emits -miphoneos-version-min, so the tvOS version is passed directly.
+        version = f"-mtvos{'-simulator' if simulator else ''}-version-min={APPLE_MIN_VERSION}"
+        args["target_os"] = "tvos"
+    else:
+        # Mac Catalyst: an iOS build against the macOS SDK with the macabi triple and the SDK's iOSSupport tree.
+        sdk = subprocess.run(["xcrun", "--sdk", "macosx", "--show-sdk-path"], check=True, text=True,
+                             capture_output=True).stdout.strip()
+        triple = f"{'arm64' if arch == 'arm64' else 'x86_64'}-apple-ios{APPLE_MIN_VERSION}-macabi"
+        args.update({"target_os": "ios", "xcode_sysroot": sdk})
+        args["extra_cflags"] += ["-isystem", f"{sdk}/System/iOSSupport/usr/include",
+                                 "-iframework", f"{sdk}/System/iOSSupport/System/Library/Frameworks"]
+        version = f"--target={triple}"
+    for key in ("extra_cflags", "extra_asmflags", "extra_ldflags"):
+        args[key].append(version)
+    return args
 
 
 def wasm_setjmp_shim(emsdk_dir, out_dir):
@@ -218,7 +267,10 @@ def defines(out_dir):
             continue
         for line in text.splitlines():
             line = line.strip()
-            if line and not line.split("=")[0].endswith("_IMPLEMENTATION") and not line.startswith("U_"):
+            # gn desc also prints warnings to stdout; keep only NAME or NAME=VALUE.
+            if not DEFINE.fullmatch(line):
+                continue
+            if not line.split("=")[0].endswith("_IMPLEMENTATION") and not line.startswith("U_"):
                 found.add(line)
     return sorted(found)
 
@@ -240,6 +292,7 @@ def main():
     parser.add_argument("--ndk", default=os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT"),
                         help="Android NDK (default: ANDROID_NDK_HOME or ANDROID_NDK_ROOT)")
     parser.add_argument("--emscripten", type=pathlib.Path, help="toolchain directory written by fetch-emscripten.py")
+    parser.add_argument("--no-archive", action="store_true", help="stage the slice in artifacts/ without a tar.gz")
     args = parser.parse_args()
     if args.arch not in ARCHES[args.os]:
         sys.exit(f"{args.os} builds {', '.join(sorted(ARCHES[args.os]))}")
@@ -271,6 +324,9 @@ def main():
         gn_args.update(wasm_args(toolchain.pop("emsdkDir")))
         targets = ["skia"] + MODULE_TARGETS
         platform = f"wasm-emscripten-{toolchain['emscripten']}"
+    elif args.os in ("ios", "ios-simulator", "tvos", "tvos-simulator", "maccatalyst"):
+        gn_args.update(apple_args(args.os, args.arch))
+        toolchain = {"minimumOS": APPLE_MIN_VERSION}
     else:
         gn_args.update({"linux": linux_args, "macos": macos_args, "windows": windows_args}[args.os](args.arch))
     config = f"Release-{platform}"
@@ -315,6 +371,9 @@ def main():
         "libraries": [lib.name for lib in libs],
     }
     (stage / "build-info.json").write_text(json.dumps(info, indent=2) + "\n")
+    if args.no_archive:
+        print(f"Staged {stage}")
+        return
 
     RELEASE.mkdir(exist_ok=True)
     archive = RELEASE / f"{name}.tar.gz"

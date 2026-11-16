@@ -206,9 +206,43 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  apple:
+    name: ${{ matrix.platform }}
+    needs: resolve
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, tvos, maccatalyst]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch Skia
+        run: python scripts/fetch-skia.py --repository "$SKIA_BUILDER_REPOSITORY" --ref "${{ needs.resolve.outputs.sha }}" --os ${{ matrix.platform }}
+
+      - name: Build the slices
+        run: |
+          python scripts/package-apple.py ${{ matrix.platform }} --list-slices | while read -r slice arch; do
+            python scripts/build.py "$slice" "$arch" --no-archive --tag "${{ needs.resolve.outputs.tag }}"
+          done
+
+      - name: XCFrameworks
+        run: python scripts/package-apple.py ${{ matrix.platform }} --tag "${{ needs.resolve.outputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skia-${{ matrix.platform }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
   release:
     name: Release
-    needs: [resolve, linux, windows, macos, android, wasm]
+    needs: [resolve, linux, windows, macos, android, wasm, apple]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

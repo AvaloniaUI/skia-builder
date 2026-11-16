@@ -10,8 +10,8 @@ Run the **Build Skia** workflow (Actions → Build Skia → Run workflow) with a
 - a branch or tag,
 - a full commit SHA.
 
-The workflow resolves the version to a commit and builds Linux, Windows, macOS and Android for x64 and arm64, and
-WebAssembly once for each Emscripten version listed below. When every build succeeds, it publishes the release
+The workflow resolves the version to a commit and builds Linux, Windows, macOS and Android for x64 and arm64, iOS,
+tvOS and Mac Catalyst as XCFrameworks, and WebAssembly once for each Emscripten version listed below. When every build succeeds, it publishes the release
 `m<milestone>-<sha10>` (for example `m158-707e33875f`). A run fails if that release exists.
 
 Each release has:
@@ -19,9 +19,10 @@ Each release has:
 | Asset | Content |
 |---|---|
 | `skia-<tag>-<os>-<arch>.tar.gz` | Headers (`include`, `modules`, `src` and the third-party headers they use), the static libraries in `out/Release-<os>-<arch>`, its `args.gn` and `defines.txt`, and `build-info.json` (arguments, defines, toolchain). |
+| `skia-<tag>-<ios\|tvos\|maccatalyst>.tar.gz` | The headers, an `.xcframework` per library in `out/Release-<platform>` (device and simulator slices; Mac Catalyst arm64 and x86_64), each slice's `args.gn` and `defines.txt`, and `build-info.json`. |
 | `skia-<tag>-wasm-emscripten-<version>.tar.gz` | The same for WebAssembly, built with that Emscripten version; the libraries are in `out/Release-wasm-emscripten-<version>`. |
 | `SHA256SUMS` | The SHA-256 of each archive. |
-| `manifest.json` | The commit, milestone and each archive by RID (`linux-x64`, `osx-arm64`, `win-x64`, `android-arm64`, `browser-wasm-emscripten-3.1.56`, ...) with its size and SHA-256. |
+| `manifest.json` | The commit, milestone and each archive by RID (`linux-x64`, `osx-arm64`, `win-x64`, `android-arm64`, `ios`, `browser-wasm-emscripten-3.1.56`, ...) with its size and SHA-256. |
 
 ## Builds
 
@@ -34,9 +35,12 @@ skshaper and skunicode (ICU and HarfBuzz, built from Skia's third-party sources)
 | Windows | clang-cl, static CRT (`/MT`) | GL, Vulkan, Direct3D |
 | macOS | Xcode Clang | GL, Metal |
 | Android | NDK r27d Clang, API level 24, the NDK's libc++ | GLES, Vulkan |
+| iOS, tvOS | Xcode Clang, iOS and tvOS 15.0; device arm64, simulator arm64 and x86_64 | Metal |
+| Mac Catalyst | Xcode Clang, iOS 15.0 on Mac (`-macabi`), arm64 and x86_64 | Metal |
 | WebAssembly | Emscripten of a .NET SDK's wasm-tools workload, wasm SIMD (`-msimd128`), no threads | WebGL 2 |
 
-Graphite uses Vulkan, Direct3D or Metal; Dawn is not built, so WebAssembly has no Graphite.
+Graphite uses Vulkan, Direct3D or Metal; Dawn is not built, so WebAssembly has no Graphite. The iOS, tvOS and Mac
+Catalyst libraries contain arm64 without arm64e (Skia compiles both; `package-apple.py` removes arm64e).
 
 ### WebAssembly and Emscripten versions
 
@@ -70,6 +74,11 @@ scripts/build-linux.sh x64                                # Linux, in docker/lin
 python3 scripts/build.py macos arm64                      # macOS or Windows, on that OS
 python3 scripts/fetch-skia.py --ref 158 --os android
 python3 scripts/build.py android arm64 --ndk <ndk>         # or ANDROID_NDK_HOME
+python3 scripts/fetch-skia.py --ref 158 --os ios           # iOS, tvOS or Mac Catalyst, on a Mac
+python3 scripts/package-apple.py ios --list-slices | while read -r slice arch; do
+  python3 scripts/build.py "$slice" "$arch" --no-archive
+done
+python3 scripts/package-apple.py ios                      # the XCFrameworks and the archive
 python3 scripts/fetch-skia.py --ref 158 --os wasm
 python3 scripts/fetch-emscripten.py --sdk-band 10.0.100   # toolchains/emscripten-10.0.100
 python3 scripts/build.py wasm wasm32 --emscripten toolchains/emscripten-10.0.100
