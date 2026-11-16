@@ -1,181 +1,179 @@
-name: Build Skia Artifacts
+name: Build Skia
 
 on:
-  push:
-    branches:
-      - '**'
-  pull_request:
-    branches:
-      - '**'
+  workflow_dispatch:
+    inputs:
+      skia:
+        description: "Skia version: a milestone (158 builds the tip of chrome/m158), a branch, a tag or a full commit SHA"
+        required: true
+        default: "158"
+      repository:
+        description: "GitHub repository of Skia"
+        required: true
+        default: "google/skia"
+
+permissions:
+  contents: read
 
 env:
-  # Set to "true" to enable Graphite (adds --graphite to build commands)
-  GRAPHITE: "false"
+  SKIA_BUILDER_REPOSITORY: ${{ inputs.repository }}
 
 jobs:
-  headers:
-    name: Headers
-    runs-on: ubuntu-latest
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.version.outputs.sha }}
+      milestone: ${{ steps.version.outputs.milestone }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-          persist-credentials: true
-          clean: false
+      - uses: actions/checkout@v4
 
-      - name: Sync Skia dependencies
+      - name: Resolve ${{ inputs.skia }}
+        id: version
+        env:
+          REF: ${{ inputs.skia }}
+        run: python3 scripts/fetch-skia.py --repository "$SKIA_BUILDER_REPOSITORY" --ref "$REF" --resolve-only --github-output
+
+      - name: Check that the release does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
-          cd depot_tools
-          ./update_depot_tools
-          cd ../skia
-          python3 tools/git-sync-deps
-      - name: Extract headers
-        run: python3 scripts/build.py headers
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::Release $TAG already exists"
+            exit 1
+          fi
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Skia
+        run: python3 scripts/fetch-skia.py --repository "$SKIA_BUILDER_REPOSITORY" --ref "${{ needs.resolve.outputs.sha }}" --os linux
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
         with:
-          name: headers
-          path: artifacts/*
-  
+          context: docker/linux
+          load: true
+          tags: skia-builder-linux:${{ matrix.arch }}
+          cache-from: type=gha,scope=linux-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=linux-${{ matrix.arch }}
+
+      - name: Build
+        env:
+          SKIA_BUILDER_IMAGE: skia-builder-linux:${{ matrix.arch }}
+        run: scripts/build-linux.sh ${{ matrix.arch }} --tag "${{ needs.resolve.outputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
   windows:
-    name: Windows
-    runs-on: windows-latest
+    name: Windows ${{ matrix.arch }}
+    needs: resolve
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
-    env:
-      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Enable long paths
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          submodules: recursive
-          fetch-depth: 0
-          persist-credentials: true
-          clean: false
+          python-version: "3.12"
 
-      - name: Sync Skia dependencies
-        shell: pwsh
-        run: |
-          $env:PATH = "${{ github.workspace }}\depot_tools;" + $env:PATH
-          Set-Location depot_tools
-          ./update_depot_tools.bat
-          Set-Location ../skia
-          ../depot_tools/python-bin/python3.bat tools/git-sync-deps
+      - name: Fetch Skia
+        run: python scripts/fetch-skia.py --repository "$env:SKIA_BUILDER_REPOSITORY" --ref "${{ needs.resolve.outputs.sha }}" --os windows
 
-      - name: Build (${{ matrix.arch }})
-        shell: pwsh
-        run: |
-          depot_tools/python-bin/python3.bat scripts/build.py windows ${{ matrix.arch }} ${{ env.GRAPHITE == 'true' && '--graphite' || '' }}
+      - name: Build
+        run: python scripts/build.py windows ${{ matrix.arch }} --tag "${{ needs.resolve.outputs.tag }}"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
-          path: artifacts/*
+          path: release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
 
-  linux:
-    name: Linux
-    runs-on: ubuntu-latest
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: resolve
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64, arm]
-    env:
-      CLANG_BUILDER_IMAGE: ghcr.io/avaloniaui/clang-cross-builder:latest
+        arch: [x64, arm64]
     steps:
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          python-version: "3.12"
 
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Fetch Skia
+        run: python scripts/fetch-skia.py --repository "$SKIA_BUILDER_REPOSITORY" --ref "${{ needs.resolve.outputs.sha }}" --os macos
+
+      - name: Build
+        run: python scripts/build.py macos ${{ matrix.arch }} --tag "${{ needs.resolve.outputs.tag }}"
+
+      - uses: actions/upload-artifact@v4
         with:
-          submodules: recursive
-          fetch-depth: 0
-          persist-credentials: true
-          clean: false
+          name: macos-${{ matrix.arch }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
 
-      - name: Sync Skia dependencies
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
-          cd depot_tools
-          ./update_depot_tools
-          cd ../skia
-          python3 tools/git-sync-deps
-
-      - name: Build (arch)
-        run: |
-          scripts/build-linux.sh ${{ matrix.arch }} ${{ env.GRAPHITE == 'true' && '--graphite' || '' }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-${{ matrix.arch }}
-          path: artifacts/*
-
-  macos:
-    name: macOS
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-          persist-credentials: true
-          clean: false
-
-      - name: Sync Skia dependencies
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/depot_tools:${PATH}"
-          cd depot_tools
-          ./update_depot_tools
-          cd ../skia
-          python3 tools/git-sync-deps
-
-      - name: Build 
-        run: python3 scripts/build.py macos all ${{ env.GRAPHITE == 'true' && '--graphite' || '' }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-all
-          path: artifacts/*
-          
-  create-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [linux, windows, macos, headers]
-    if: github.event_name == 'push'
+  release:
+    name: Release
+    needs: [resolve, linux, windows, macos]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release
+          merge-multiple: true
 
-      - name: Generate release id
-        run: ./scripts/genrelease.sh
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ env.RELEASE_ID }}
-          name: ${{ env.RELEASE_ID }}
-          draft: false
-          body_path: ./release.txt
-          prerelease: false
-          files: release/*
+      - name: Checksums and manifest
+        env:
+          REF: ${{ inputs.skia }}
+        run: >
+          python3 scripts/make-release.py release
+          --tag "${{ needs.resolve.outputs.tag }}"
+          --repository "$SKIA_BUILDER_REPOSITORY"
+          --sha "${{ needs.resolve.outputs.sha }}"
+          --milestone "${{ needs.resolve.outputs.milestone }}"
+          --ref "$REF"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: >
+          gh release create "$TAG" release/*.tar.gz release/SHA256SUMS release/manifest.json
+          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Skia $TAG" --notes-file release/release-notes.md

@@ -1,365 +1,222 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
+"""Builds the Skia checkout in ./skia (see fetch-skia.py) and packages it.
 
-import os
+  build.py <os> <arch> [--tag TAG]
+
+<os> is linux, macos or windows; <arch> is x64 or arm64. The archive is release/skia-<TAG>-<os>-<arch>.tar.gz.
+It holds the headers (include, modules, src and the third-party headers they use), the static libraries in
+out/Release-<os>-<arch>, that directory's args.gn and defines.txt, and build-info.json.
+"""
+
+import argparse
 import json
+import os
+import pathlib
 import shutil
 import subprocess
 import sys
+import tarfile
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SKIA = ROOT / "skia"
+ARTIFACTS = ROOT / "artifacts"
+RELEASE = ROOT / "release"
 
-TARGET_OS_CANONICAL = {
-    "linux": "linux",
-    "mac": "macos",
-    "macos": "macos",
-    "darwin": "macos",
-    "win": "windows",
-    "windows": "windows",
+ARCHES = {"linux": {"x64", "arm64"}, "macos": {"x64", "arm64"}, "windows": {"x64", "arm64"}}
+
+# Libraries in the build: core, codecs, PDF, SVG, Skottie, paragraph, shaper and unicode (ICU and HarfBuzz),
+# Ganesh and Graphite (Vulkan or Metal; no Dawn).
+COMMON_ARGS = {
+    "is_official_build": True,
+    "is_debug": False,
+    "skia_enable_tools": False,
+    "skia_use_partition_alloc": False,
+    "skia_enable_ganesh": True,
+    "skia_enable_graphite": True,
+    "skia_use_dawn": False,
+    "skia_enable_pdf": True,
+    "skia_enable_skottie": True,
+    "skia_enable_svg": True,
+    "skia_use_icu": True,
+    "skia_use_harfbuzz": True,
+    "skia_pdf_subset_harfbuzz": True,
+    "skia_use_system_expat": False,
+    "skia_use_system_freetype2": False,
+    "skia_use_system_harfbuzz": False,
+    "skia_use_system_icu": False,
+    "skia_use_system_libjpeg_turbo": False,
+    "skia_use_system_libpng": False,
+    "skia_use_system_libwebp": False,
+    "skia_use_system_zlib": False,
 }
 
-def has_env_flag(name):
-    return os.environ.get(name, "0") == "1"
+# Targets whose defines a consumer compiles with (written to defines.txt).
+DEFINE_TARGETS = [
+    "//:skia", "//modules/skparagraph:skparagraph", "//modules/skottie:skottie", "//modules/svg:svg",
+    "//modules/skshaper:skshaper", "//modules/skunicode:skunicode_icu",
+]
 
-def _format_scalar(value):
-    # strings must be quoted and escaped, numbers/bools emitted as literals
-    if isinstance(value, str):
-        return json.dumps(value)
+# Headers outside include/, modules/ and src/ that public headers include.
+THIRD_PARTY_HEADERS = [
+    "third_party/icu", "third_party/externals/icu/source/common", "third_party/externals/icu/source/i18n",
+    "third_party/externals/harfbuzz/src", "third_party/externals/freetype/include", "third_party/externals/libpng",
+    "third_party/externals/zlib", "third_party/externals/libwebp/src",
+]
+
+
+def linux_args(arch):
+    cc = os.environ.get("SKIA_BUILDER_CC", "clang-20")
+    cxx = os.environ.get("SKIA_BUILDER_CXX", "clang++-20")
+    args = {
+        "target_os": "linux",
+        "target_cpu": arch,
+        "cc": cc,
+        "cxx": cxx,
+        "skia_use_vulkan": True,
+        "extra_cflags": ["-ffunction-sections", "-fdata-sections"],
+        "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
+    }
+    if arch == "arm64":
+        args.update({"skia_gl_standard": "gles", "skia_use_egl": True})
+        args["extra_cflags"].append("-mno-outline-atomics")
+    return args
+
+
+def macos_args(arch):
+    return {
+        "target_os": "mac",
+        "target_cpu": arch,
+        "skia_use_metal": True,
+        "skia_use_vulkan": False,
+        "extra_cflags": ["-ffunction-sections", "-fdata-sections", "-DHAVE_ARC4RANDOM_BUF"],
+        "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
+    }
+
+
+def windows_args(arch):
+    return {
+        "target_os": "win",
+        "target_cpu": arch,
+        "clang_win": os.environ.get("SKIA_BUILDER_CLANG_WIN", "C:/Program Files/LLVM"),
+        "skia_use_vulkan": True,
+        "skia_use_direct3d": True,
+        "skia_use_dng_sdk": True,
+        "skia_enable_fontmgr_win_gdi": False,
+        "extra_cflags": ["/MT", "/EHsc", "/Z7", "/guard:cf", "/Gy", "/Gw", "-D_HAS_AUTO_PTR_ETC=1"],
+        "extra_cflags_cc": ["/GR-"],
+        "extra_ldflags": ["/DEBUG:FULL", "/DEBUGTYPE:CV,FIXUP", "/guard:cf"],
+    }
+
+
+def gn_value(value):
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    # fallback to stringified-quoted
-    return json.dumps(str(value))
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(gn_value(v) for v in value) + "]"
+    return json.dumps(value)
 
 
-def _format_list(lst):
-    # produce multiline list with each element on its own indented line and a trailing comma
-    if not lst:
-        return "[]"
-    parts = ["["]
-    for item in lst:
-        parts.append("    " + _format_scalar(item) + ",")
-    parts.append("]")
-    return "\n".join(parts)
+def tool(name):
+    """gn is in bin/ (bin/fetch-gn), ninja in third_party/ninja/ (bin/fetch-ninja)."""
+    for folder in (SKIA / "bin", SKIA / "third_party" / name):
+        for candidate in (folder / (name + ".exe"), folder / name):
+            if candidate.exists():
+                return str(candidate)
+    sys.exit(f"{name} not found: run scripts/fetch-skia.py")
 
 
-def dict_to_gn(obj):
-    lines = []
-    for key, val in obj.items():
-        if isinstance(val, (list, tuple)):
-            formatted = _format_list(val)
-            lines.append(f"{key} = {formatted}") 
-        else:
-            lines.append(f"{key} = {_format_scalar(val)}")
-    # separate entries with a blank line to match example formatting
-    return "\n\n".join(lines)
-
-def write_file(path, content):
-    with open(path, "w") as f:
-        f.write(content)
-        
-def read_all_lines(path):
-    with open(path, "r") as f:
-        return f.readlines()
-
-def copy_preserving_dir(root: str, file: str, src_dir: str, dest_dir: str):
-    src_path = os.path.join(root, file)
-    rel_path = os.path.relpath(src_path, src_dir)
-    dest_path = os.path.join(dest_dir, rel_path)
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    shutil.copy2(src_path, dest_path)
-    
-def copy_extension(src_dir, dest_dir, extension):
-    # Copy all files with the given extension from src_dir to dest_dir
-    for root, dirs, files in os.walk(src_dir):
-        for file in files:
-            if file.endswith(extension):
-                copy_preserving_dir(root, file, src_dir, dest_dir)
-
-def copy_includes(src_dir, dest_dir):
-    for root, dirs, files in os.walk(src_dir):
-        for file in files:
-            if file.endswith('.h'):
-                copy_preserving_dir(root, file, src_dir, dest_dir)
-
-def copy_headers():
-    artifacts_dir = os.path.join("..", "artifacts", "headers")
-    for skiaDir in ["include", "modules", "src", "gpu"]:
-        copy_includes(skiaDir, os.path.join(artifacts_dir, skiaDir))
-    copy_includes(os.path.join("third_party", "externals", "dawn", "include"), artifacts_dir)
+def run(args, capture=False):
+    print("+ " + " ".join(args), flush=True)
+    result = subprocess.run(args, cwd=SKIA, check=True, text=True, stdout=subprocess.PIPE if capture else None)
+    return result.stdout if capture else None
 
 
-def _ensure_arch_supported(target_os, arch):
-    supported = {
-        "linux": {"x64", "arm64", "arm"},
-        "macos": {"x64", "arm64"},
-        "windows": {"x64", "arm64"},
-    }
-
-    if arch not in supported.get(target_os, set()):
-        raise ValueError(f"Unsupported architecture {arch} for {target_os}")
-
-
-def collect_defines(path):
-    lines = read_all_lines(path)
-    defines = []
-    for line in lines:
-        line = line.strip()
-        if line.startswith("defines = "):
-            parts = line[len("defines = "):].strip().split()
-            for part in parts:
-                if part.startswith("-D"):
-                    defines.append(part[2:])
-            break
-    return defines
-
-def generate_skia_h(gn_dir):
-    defines = collect_defines(os.path.join(gn_dir, "obj", "public_headers_warnings_check.ninja"))
-    defines = [d for d in defines if d.startswith("SK_") or d.startswith("SKIA_")]
-    
-    define_directives = [f"#define {d.replace('=', ' ')}" for d in defines]
-    skia_h = read_all_lines(os.path.join(gn_dir, "gen", "skia.h"))
-    
-    # insert lines from define_directives to skia_h before first line in skia_h that contains #include
-    output_lines = []
-    inserted = False
-    for line in skia_h:
-        if not inserted and line.strip().startswith("#include"):
-            output_lines.extend(define_directives)
-            output_lines.append("\n")
-            inserted = True
-        output_lines.append(line.strip())
-    return "\n".join(output_lines)
-
-def gen_linux(arch, self_contained, args):
-
-    # normalize to LLVM-style arch names
-    if arch == "x64":
-        llvm_target = "x86_64-linux-gnu"
-    elif arch == "arm64":
-        llvm_target = "aarch64-linux-gnu"
-    elif arch == "arm":
-        llvm_target = "arm-linux-gnueabihf"
-    else:
-        raise ValueError(f"Unsupported architecture: {arch}")
-    
-    clang_suffix = os.environ.get("SKIA_BUILDER_CLANG_SUFFIX", "")
-    sysroots_prefix = os.environ.get("SKIA_BUILDER_SYSROOTS_PREFIX", "")
-    sysroot_arg = "--sysroot=" + sysroots_prefix + "/sysroots/" + llvm_target
-    print(sysroot_arg)
-    
-    args.update({
-        "skia_use_vulkan": True,
-        "skia_use_x11": False,
-        "skia_use_system_freetype2": False,
-        "cc": "clang" + clang_suffix,
-        "cxx": "clang++" + clang_suffix,
-        "target_os": "linux",
-        "target_cpu": arch,
-        "skia_use_icu": False,
-        "skia_use_piex": True,
-        "skia_use_system_expat": False, # consider system (ABI seems to be stable)
-        "skia_use_system_libjpeg_turbo": False,
-        "skia_use_system_libpng": False,
-        "skia_use_system_libwebp": False,
-        "skia_use_system_zlib": False, # consider system  (ABI seems to be stable)
-    })
-    args["extra_cflags"].extend([
-        "--target=" + llvm_target,
-        sysroot_arg
-    ])
-    args["extra_cflags_cc"].extend([
-        "-stdlib=libc++"
-    ])
-    args["extra_ldflags"].extend([
-        "--target=" + llvm_target,
-        sysroot_arg,
-        "-rtlib=compiler-rt",
-        "-stdlib=libc++",
-        "-rtlib=compiler-rt",
-        "-fuse-ld=lld",
-        "-lc++",
-        "-lc++abi",
-        "-lunwind",
-        "-lm",
-        "-lc"
-    ])
-    if(args["skia_use_dawn"]):
-        args["dawn_use_x11"] = False
-    if arch == "arm":
-        args["extra_cflags"].extend([
-            "-mfloat-abi=hard",
-            "-mfpu=neon",
-        ])
-    
-
-def gen_macos(arch, self_contained, args):
-    _ensure_arch_supported("macos", arch)
-
-    args.update({
-        "skia_use_vulkan": False,
-        "skia_use_metal": True,
-        "target_os": "mac",
-        "target_cpu": arch,
-        "skia_use_icu": False,
-        "skia_use_piex": True,
-        "skia_use_system_expat": False,
-        "skia_use_system_libjpeg_turbo": False,
-        "skia_use_system_libpng": False,
-        "skia_use_system_libwebp": False,
-        "skia_use_system_zlib": False,
-    })
-
-    args["extra_cflags"].extend([
-        "-DSKIA_C_DLL",
-        "-DHAVE_ARC4RANDOM_BUF"
-    ])
+def defines(out_dir):
+    found = set()
+    for target in DEFINE_TARGETS:
+        try:
+            text = run([tool("gn"), "desc", str(out_dir), target, "defines"], capture=True)
+        except subprocess.CalledProcessError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.split("=")[0].endswith("_IMPLEMENTATION") and not line.startswith("U_"):
+                found.add(line)
+    return sorted(found)
 
 
-def gen_windows(arch, self_contained, args):
-    _ensure_arch_supported("windows", arch)
-
-    args.update({
-        "skia_use_vulkan": True,
-        "target_os": "win",
-        "target_cpu": arch,
-        "clang_win" : "C:/Program Files/LLVM",
-        "skia_enable_fontmgr_win_gdi": False,
-        "skia_use_dng_sdk": True,
-        "skia_use_icu": False,
-        "skia_use_piex": True,
-        "skia_use_system_expat": False,
-        "skia_use_system_libjpeg_turbo": False,
-        "skia_use_system_libpng": False,
-        "skia_use_system_libwebp": False,
-        "skia_use_system_zlib": False,
-        "skia_use_direct3d": True,
-    })
-
-    mt_flag = "/MTd" if args.get("is_debug") else "/MT"
-    args["extra_cflags"].extend([
-        mt_flag,
-        "/EHsc",
-        "/Z7",
-        "/guard:cf",
-        "-D_HAS_AUTO_PTR_ETC=1",
-    ])
-    args["extra_ldflags"].extend([
-        "/DEBUG:FULL",
-        "/DEBUGTYPE:CV,FIXUP",
-        "/guard:cf",
-    ])
-
-def build_target(target_os, arch, self_contained, debug, graphite):
-    output_name = f"{target_os}_{arch}"
-    if debug:
-        output_name += "_debug"
-    gn_dir = os.path.join("out", output_name)
-    artifacts_dir = os.path.join("..", "artifacts", output_name)
-    
-    canonical_os = TARGET_OS_CANONICAL.get(target_os)
-    if canonical_os is None:
-        print(f"Unsupported target OS: {target_os}", file=sys.stderr)
-        sys.exit(1)
-
-    _ensure_arch_supported(canonical_os, arch)
-
-    args = {
-        "is_debug": debug,
-        "is_official_build": not debug,
-        "extra_asmflags": [],
-        "skia_enable_tools": False,
-        "extra_cflags": ["-ffunction-sections", "-fdata-sections", "-fno-rtti"],
-        "extra_cflags_c": [],
-        "extra_cflags_cc": ["-std=c++20", "-fno-exceptions"],
-        "extra_ldflags": [],
-        "skia_enable_skottie": True,
-        "skia_use_harfbuzz": False,
-        "skia_enable_ganesh": True,
-        # Controlled by --graphite flag (default: False)
-        "skia_enable_graphite": bool(graphite),
-        "skia_use_dawn": bool(graphite),
-    }
-
-    if canonical_os == "linux":
-        gen_linux(arch, self_contained, args)
-    elif canonical_os == "macos":
-        gen_macos(arch, self_contained, args)
-    elif canonical_os == "windows":
-        gen_windows(arch, self_contained, args)
-    else:
-        print(f"Unsupported target OS: {canonical_os}", file=sys.stderr)
-        sys.exit(1)
-        
-    os.makedirs(gn_dir, exist_ok=True)
-    
-    write_file(os.path.join(gn_dir, "args.gn"), dict_to_gn(args))
-    
-    if not has_env_flag("DEBUG_SKIP_BUILD"):
-        # On Windows, prefer the gn.bat inside depot_tools to ensure batch wrapper is used.
-        if os.name == "nt" or sys.platform.startswith("win"):
-            gn_cmd = os.path.abspath(os.path.join("..", "depot_tools", "gn.bat"))
-        else:
-            gn_cmd = "gn"
-        subprocess.run([gn_cmd, 'gen', gn_dir], check = True)
-        if not has_env_flag("DEBUG_SKIP_NINJA"):
-            subprocess.run(['ninja', '-C', gn_dir], check = True)
+def copy_headers(src, dest):
+    for path in src.rglob("*"):
+        if path.suffix in (".h", ".hpp", ".inc") and path.is_file():
+            target = dest / path.relative_to(SKIA)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
 
 
-    # recursively clear artifacts dir
-    if os.path.exists(artifacts_dir):
-        shutil.rmtree(artifacts_dir)
-
-    os.makedirs(artifacts_dir, exist_ok=True)
-    
-    # Copy .a files from gn_dir to artifacts_dir/lib
-    lib_dir = os.path.join(artifacts_dir, "lib")
-    os.makedirs(lib_dir, exist_ok=True)
-    copy_extension(gn_dir, lib_dir, ".a")
-    copy_extension(gn_dir, lib_dir, ".lib")
-    
-    headers_dir = os.path.join(artifacts_dir, "headers")
-    # check if exists
-    if os.path.exists(headers_dir):
-        os.removedirs(headers_dir)
-    
-    os.makedirs(headers_dir, exist_ok=True)
-    write_file(os.path.join(headers_dir, "skia.h"), generate_skia_h(gn_dir))
-    if has_env_flag("SKIA_BUILDER_SAVE_SPACE"):
-        shutil.rmtree(gn_dir)
-    copy_includes(os.path.join(gn_dir, "gen", "third_party", "externals", "dawn", "include"), headers_dir)
-    
 def main():
-    argv = sys.argv[1:]
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("os", choices=sorted(ARCHES))
+    parser.add_argument("arch", choices=["x64", "arm64"])
+    parser.add_argument("--tag", help="release tag (m<milestone>-<sha10>); read from the checkout when omitted")
+    parser.add_argument("--skip-build", action="store_true", help="package an existing build")
+    args = parser.parse_args()
+    if not (SKIA / "BUILD.gn").exists():
+        sys.exit("No Skia checkout in ./skia: run scripts/fetch-skia.py first")
 
-    os.chdir("skia")
-    
-    if argv[0] == "headers":
-        copy_headers()
-        sys.exit(0)
-    
-    if len(argv) < 2:
-        print(f"Usage: ", file=sys.stderr)
-        print(f"{sys.argv[0]} <os> <arch> [--self-contained]", file=sys.stderr)
-        print(f"{sys.argv[0]} headers", file=sys.stderr)
-        sys.exit(2)
-        
-    target_os = argv[0]
-    arch = argv[1]
-    args = argv[2:]
-    self_contained = "--self-contained" in args
-    debug = "--debug" in args
-    graphite = "--graphite" in args
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=SKIA, check=True, text=True, capture_output=True).stdout.strip()
+    milestone = next(int(l.split()[2]) for l in (SKIA / "include/core/SkMilestone.h").read_text().splitlines()
+                     if l.startswith("#define SK_MILESTONE"))
+    tag = args.tag or f"m{milestone}-{sha[:10]}"
+    config = f"Release-{args.os}-{args.arch}"
+    out_dir = SKIA / "out" / config
 
-    # prepend ../depot_tools to PATH
-    depot_tools_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "depot_tools"))
-    os.environ["PATH"] = depot_tools_path + os.pathsep + os.environ.get("PATH", "")
+    gn_args = dict(COMMON_ARGS)
+    gn_args.update({"linux": linux_args, "macos": macos_args, "windows": windows_args}[args.os](args.arch))
+    if not args.skip_build:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "args.gn").write_text("".join(f"{k} = {gn_value(v)}\n" for k, v in gn_args.items()))
+        run([tool("gn"), "gen", str(out_dir)])
+        run([tool("ninja"), "-C", str(out_dir), "skia", "modules"])
 
+    name = f"skia-{tag}-{args.os}-{args.arch}"
+    stage = ARTIFACTS / name
+    if stage.exists():
+        shutil.rmtree(stage)
+    for part in ["include", "modules", "src"] + THIRD_PARTY_HEADERS:
+        if (SKIA / part).exists():
+            copy_headers(SKIA / part, stage)
+    lib_dir = stage / "out" / config
+    lib_dir.mkdir(parents=True)
+    libs = sorted(p for p in out_dir.iterdir() if p.suffix in (".a", ".lib"))
+    if not libs:
+        sys.exit(f"No static libraries in {out_dir}")
+    for lib in libs:
+        shutil.copy2(lib, lib_dir / lib.name)
+    shutil.copy2(out_dir / "args.gn", lib_dir / "args.gn")
+    found = defines(out_dir)
+    (lib_dir / "defines.txt").write_text("".join(f"-D{d}\n" for d in found))
+    info = {
+        "tag": tag,
+        "repository": os.environ.get("SKIA_BUILDER_REPOSITORY", "google/skia"),
+        "sha": sha,
+        "milestone": milestone,
+        "os": args.os,
+        "arch": args.arch,
+        "config": config,
+        "args": gn_args,
+        "defines": found,
+        "libraries": [lib.name for lib in libs],
+    }
+    (stage / "build-info.json").write_text(json.dumps(info, indent=2) + "\n")
 
-    if arch == "all":
-        for a in ["x64", "arm64"]:
-            build_target(target_os, a, self_contained, debug, graphite)
-    else:        
-        build_target(target_os, arch, self_contained, debug, graphite)
+    RELEASE.mkdir(exist_ok=True)
+    archive = RELEASE / f"{name}.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(stage, arcname=name)
+    print(f"Wrote {archive} ({archive.stat().st_size:,} bytes)")
+
 
 if __name__ == "__main__":
     main()

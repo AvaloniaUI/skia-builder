@@ -1,3 +1,6 @@
-agent
-artifacts
+skia/
+artifacts/
+release/
 .idea
+agent
+__pycache__/
