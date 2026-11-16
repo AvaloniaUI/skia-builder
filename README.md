@@ -32,7 +32,7 @@ skshaper and skunicode (ICU and HarfBuzz, built from Skia's third-party sources)
 | OS | Compiler | GPU backends |
 |---|---|---|
 | Linux | Clang 20 with the gcc-11 libstdc++, on Ubuntu 20.04 (glibc 2.31) | GL, Vulkan; arm64 uses GLES and EGL |
-| Windows | clang-cl, static CRT (`/MT`) | GL, Vulkan, Direct3D |
+| Windows | clang-cl, static CRT (`/MT`); ICU data in `icudtl.dat`, loaded at run time from the directory of the executable or of the library that links Skia | GL, Vulkan, Direct3D |
 | macOS | Xcode Clang | GL, Metal |
 | Android | NDK r27d Clang, API level 24, the NDK's libc++ | GLES, Vulkan |
 | iOS, tvOS | Xcode Clang, iOS and tvOS 15.0; device arm64, simulator arm64 and x86_64 | Metal |

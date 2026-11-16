@@ -398,6 +398,9 @@ def main():
         sys.exit(f"No static libraries in {out_dir}")
     for lib in libs:
         shutil.copy2(lib, lib_dir / lib.name)
+    # Windows builds load ICU's data at run time from icudtl.dat next to the executable or library (SkLoadICU).
+    if (out_dir / "icudtl.dat").exists():
+        shutil.copy2(out_dir / "icudtl.dat", lib_dir / "icudtl.dat")
     shutil.copy2(out_dir / "args.gn", lib_dir / "args.gn")
     found = defines(out_dir)
     (lib_dir / "defines.txt").write_text("".join(f"-D{d}\n" for d in found))
