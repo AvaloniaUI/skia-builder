@@ -67,6 +67,8 @@ jobs:
 
       - name: Build image
         uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: docker/linux
           load: true
@@ -156,6 +158,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: "*-*64"
           path: release
           merge-multiple: true
 
