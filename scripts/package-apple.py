@@ -90,7 +90,7 @@ def main():
             names = set(info["libraries"])
             if libraries is None:
                 libraries = names
-                for part in ("include", "modules", "src", "third_party"):
+                for part in ("include", "modules", "src", "third_party", "licenses"):
                     if (slice_stage / part).exists():
                         shutil.copytree(slice_stage / part, stage / part)
             elif names != libraries:

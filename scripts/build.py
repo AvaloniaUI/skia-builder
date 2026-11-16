@@ -13,6 +13,7 @@ defines.txt, and build-info.json.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -170,7 +171,9 @@ def wasm_args(emsdk_dir):
         "skia_use_piex": False,
         "skia_use_dng_sdk": False,
         "skia_use_lua": False,
-        "extra_cflags": ["-msimd128", "-ffunction-sections", "-fdata-sections"],
+        # .NET links WebAssembly apps with WebAssembly exception handling (-fwasm-exceptions), so setjmp and longjmp
+        # use it too; Emscripten's JavaScript longjmp is not linked there.
+        "extra_cflags": ["-msimd128", "-sSUPPORT_LONGJMP=wasm", "-ffunction-sections", "-fdata-sections"],
         "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
     }
 
@@ -209,6 +212,32 @@ def apple_args(slice_os, arch):
     for key in ("extra_cflags", "extra_asmflags", "extra_ldflags"):
         args[key].append(version)
     return args
+
+
+# WebAssembly builds keep ICU's version suffix on symbol names (ubrk_open_78), so Skia's ICU does not clash with the
+# .NET runtime's ICU, which is linked into the same module without suffixes.
+ICU_RENAMING = [
+    ("third_party/icu/BUILD.gn", '"U_DISABLE_RENAMING=1",', '"U_DISABLE_RENAMING=0",'),
+    ("modules/skunicode/BUILD.gn", 'defines += [ "U_DISABLE_RENAMING=1" ]', 'defines += [ "U_DISABLE_RENAMING=0" ]'),
+]
+
+
+@contextlib.contextmanager
+def icu_renaming():
+    """Applies ICU_RENAMING to the checkout for the duration of a build."""
+    originals = {}
+    try:
+        for path, old, new in ICU_RENAMING:
+            file = SKIA / path
+            originals.setdefault(file, file.read_text())
+            current = file.read_text()
+            if old not in current:
+                sys.exit(f"{path} no longer contains {old}")
+            file.write_text(current.replace(old, new))
+        yield
+    finally:
+        for file, text in originals.items():
+            file.write_text(text)
 
 
 def wasm_setjmp_shim(emsdk_dir, out_dir):
@@ -275,6 +304,19 @@ def defines(out_dir):
     return sorted(found)
 
 
+LICENSE_FILE = re.compile(r"(LICEN[CS]E|COPYING|NOTICE)S?([._-][\w.-]*)?", re.IGNORECASE)
+
+
+def copy_licenses(stage):
+    """Skia's LICENSE in licenses/skia/, and the license files of each fetched dependency in licenses/<name>/."""
+    sources = [("skia", SKIA)] + sorted((d.name, d) for d in (SKIA / "third_party" / "externals").iterdir() if d.is_dir())
+    for name, src in sources:
+        files = [f for f in src.iterdir() if f.is_file() and LICENSE_FILE.fullmatch(f.name) and f.suffix not in (".cfg", ".html")]
+        for f in files:
+            (stage / "licenses" / name).mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, stage / "licenses" / name / f.name)
+
+
 def copy_headers(src, dest):
     for path in src.rglob("*"):
         if path.suffix in (".h", ".hpp", ".inc") and path.is_file():
@@ -334,10 +376,12 @@ def main():
     if not args.skip_build:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "args.gn").write_text("".join(f"{k} = {gn_value(v)}\n" for k, v in gn_args.items()))
-        run([tool("gn"), "gen", str(out_dir)])
-        run([tool("ninja"), "-C", str(out_dir)] + targets)
+        with icu_renaming() if args.os == "wasm" else contextlib.nullcontext():
+            run([tool("gn"), "gen", str(out_dir)])
+            run([tool("ninja"), "-C", str(out_dir)] + targets)
     if args.os == "wasm":
         toolchain["setjmpShim"] = wasm_setjmp_shim(gn_args["skia_emsdk_dir"], out_dir)
+        toolchain["icuRenaming"] = True
 
     name = f"skia-{tag}-{platform}"
     stage = ARTIFACTS / name
@@ -346,6 +390,7 @@ def main():
     for part in ["include", "modules", "src"] + THIRD_PARTY_HEADERS:
         if (SKIA / part).exists():
             copy_headers(SKIA / part, stage)
+    copy_licenses(stage)
     lib_dir = stage / "out" / config
     lib_dir.mkdir(parents=True)
     libs = sorted(p for p in out_dir.iterdir() if p.suffix in (".a", ".lib"))

@@ -18,7 +18,7 @@ Each release has:
 
 | Asset | Content |
 |---|---|
-| `skia-<tag>-<os>-<arch>.tar.gz` | Headers (`include`, `modules`, `src` and the third-party headers they use), the static libraries in `out/Release-<os>-<arch>`, its `args.gn` and `defines.txt`, and `build-info.json` (arguments, defines, toolchain). |
+| `skia-<tag>-<os>-<arch>.tar.gz` | Headers (`include`, `modules`, `src` and the third-party headers they use), the license files of Skia and each dependency in `licenses/<name>/`, the static libraries in `out/Release-<os>-<arch>`, its `args.gn` and `defines.txt`, and `build-info.json` (arguments, defines, toolchain). |
 | `skia-<tag>-<ios\|tvos\|maccatalyst>.tar.gz` | The headers, an `.xcframework` per library in `out/Release-<platform>` (device and simulator slices; Mac Catalyst arm64 and x86_64), each slice's `args.gn` and `defines.txt`, and `build-info.json`. |
 | `skia-<tag>-wasm-emscripten-<version>.tar.gz` | The same for WebAssembly, built with that Emscripten version; the libraries are in `out/Release-wasm-emscripten-<version>`. |
 | `SHA256SUMS` | The SHA-256 of each archive. |
@@ -55,6 +55,14 @@ wasm-tools workload installs (`Microsoft.NET.Workload.Emscripten.Current.Manifes
 
 To add a band, add it to the `wasm` matrix. The archives are compiled as single-threaded objects; hosts that enable
 WebAssembly threads need a separate build.
+
+The archives link into .NET WebAssembly apps with the runtime's defaults:
+
+- `setjmp` and `longjmp` use WebAssembly exception handling (`-sSUPPORT_LONGJMP=wasm`), as .NET links with
+  `-fwasm-exceptions`.
+- ICU symbols keep their version suffix (`ubrk_open_78`): `build.py` sets `U_DISABLE_RENAMING=0` in Skia's ICU and
+  skunicode build files for the build and restores them afterwards. The .NET runtime links its own ICU without
+  suffixes into the same module. `build-info.json` records `toolchain.icuRenaming`.
 
 The 10.0.100 packs pair a clang that lowers `setjmp` to `__wasm_setjmp` and `__wasm_setjmp_test` (LLVM 19) with
 Emscripten 3.1.56 system libraries that define only the older `saveSetjmp`. When the toolchain's compiler-rt lacks
