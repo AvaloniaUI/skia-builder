@@ -3,7 +3,9 @@
 
   make-release.py <dir> --tag TAG --repository REPO --sha SHA --milestone N --ref REF
 
-manifest.json lists each archive by RID (linux-x64, windows-arm64, ...) with its name, size and SHA-256.
+manifest.json lists each archive by RID (linux-x64, windows-arm64, android-arm64, ...) with its name, size and
+SHA-256. WebAssembly archives are keyed browser-wasm-emscripten-<version>: a static library links only with the
+Emscripten version that built it.
 """
 
 import argparse
@@ -13,7 +15,7 @@ import pathlib
 import re
 import sys
 
-RIDS = {"linux": "linux", "macos": "osx", "windows": "win"}
+RIDS = {"linux": "linux", "macos": "osx", "windows": "win", "android": "android"}
 
 
 def sha256(path):
@@ -40,13 +42,18 @@ def main():
     assets = {}
     sums = []
     for archive in archives:
-        match = re.fullmatch(rf"skia-{re.escape(args.tag)}-(linux|macos|windows)-(x64|arm64)\.tar\.gz", archive.name)
-        if not match:
+        prefix = f"skia-{re.escape(args.tag)}-"
+        native = re.fullmatch(prefix + r"(linux|macos|windows|android)-(x64|arm64)\.tar\.gz", archive.name)
+        wasm = re.fullmatch(prefix + r"wasm-emscripten-([0-9][0-9.]*[0-9])\.tar\.gz", archive.name)
+        if not native and not wasm:
             sys.exit(f"Unexpected archive name {archive.name}")
         digest = sha256(archive)
         sums.append(f"{digest}  {archive.name}")
-        assets[f"{RIDS[match.group(1)]}-{match.group(2)}"] = {
-            "name": archive.name, "size": archive.stat().st_size, "sha256": digest}
+        entry = {"name": archive.name, "size": archive.stat().st_size, "sha256": digest}
+        if native:
+            assets[f"{RIDS[native.group(1)]}-{native.group(2)}"] = entry
+        else:
+            assets[f"browser-wasm-emscripten-{wasm.group(1)}"] = dict(entry, emscripten=wasm.group(1))
 
     manifest = {"tag": args.tag, "repository": args.repository, "sha": args.sha, "milestone": args.milestone,
                 "ref": args.ref, "assets": assets}

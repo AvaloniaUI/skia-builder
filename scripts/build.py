@@ -2,10 +2,13 @@
 """Builds the Skia checkout in ./skia (see fetch-skia.py) and packages it.
 
   build.py <os> <arch> [--tag TAG]
+  build.py android <arm64|x64> --ndk <path>                         (or ANDROID_NDK_HOME)
+  build.py wasm wasm32 --emscripten toolchains/emscripten-<band>     (see fetch-emscripten.py)
 
-<os> is linux, macos or windows; <arch> is x64 or arm64. The archive is release/skia-<TAG>-<os>-<arch>.tar.gz.
-It holds the headers (include, modules, src and the third-party headers they use), the static libraries in
-out/Release-<os>-<arch>, that directory's args.gn and defines.txt, and build-info.json.
+<os> is linux, macos, windows, android or wasm. The archive is release/skia-<TAG>-<platform>.tar.gz, where the
+platform is <os>-<arch>, or wasm-emscripten-<version> for WebAssembly. It holds the headers (include, modules, src
+and the third-party headers they use), the static libraries in out/Release-<platform>, that directory's args.gn and
+defines.txt, and build-info.json.
 """
 
 import argparse
@@ -22,7 +25,21 @@ SKIA = ROOT / "skia"
 ARTIFACTS = ROOT / "artifacts"
 RELEASE = ROOT / "release"
 
-ARCHES = {"linux": {"x64", "arm64"}, "macos": {"x64", "arm64"}, "windows": {"x64", "arm64"}}
+ARCHES = {
+    "linux": {"x64", "arm64"},
+    "macos": {"x64", "arm64"},
+    "windows": {"x64", "arm64"},
+    "android": {"x64", "arm64"},
+    "wasm": {"wasm32"},
+}
+
+ANDROID_API = 24
+
+# The module libraries. The "modules" group also builds CanvasKit when is_canvaskit is set (WebAssembly).
+MODULE_TARGETS = [
+    "modules/bentleyottmann:bentleyottmann", "modules/skottie:skottie", "modules/skparagraph:skparagraph",
+    "modules/skshaper:skshaper", "modules/svg:svg",
+]
 
 # Libraries in the build: core, codecs, PDF, SVG, Skottie, paragraph, shaper and unicode (ICU and HarfBuzz),
 # Ganesh and Graphite (Vulkan or Metal; no Dawn).
@@ -108,6 +125,65 @@ def windows_args(arch):
     }
 
 
+def android_args(arch, ndk):
+    return {
+        "target_os": "android",
+        "target_cpu": arch,
+        "ndk": ndk,
+        "ndk_api": ANDROID_API,
+        "skia_use_vulkan": True,
+        "extra_cflags": ["-ffunction-sections", "-fdata-sections"],
+        "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
+    }
+
+
+def wasm_args(emsdk_dir):
+    # is_canvaskit selects Skia's plain wasm configuration: no forced -pthread and no emsdk sysroot or activation,
+    # so the objects link into single-threaded hosts with the toolchain's own system libraries.
+    return {
+        "target_os": "wasm",
+        "target_cpu": "wasm",
+        "is_canvaskit": True,
+        "skia_emsdk_dir": emsdk_dir,
+        "skia_enable_graphite": False,
+        "skia_use_webgl": True,
+        "skia_use_webgpu": False,
+        "skia_use_vulkan": False,
+        "skia_use_angle": False,
+        "skia_use_fontconfig": False,
+        "skia_use_freetype": True,
+        "skia_use_expat": True,
+        "skia_use_libwebp_encode": True,
+        "skia_use_piex": False,
+        "skia_use_dng_sdk": False,
+        "skia_use_lua": False,
+        "extra_cflags": ["-msimd128", "-ffunction-sections", "-fdata-sections"],
+        "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
+    }
+
+
+def wasm_setjmp_shim(emsdk_dir, out_dir):
+    """Builds libwasm_setjmp.a when the toolchain's compiler-rt lacks __wasm_setjmp (see scripts/wasm/wasm_setjmp.c)."""
+    emscripten = pathlib.Path(emsdk_dir) / "upstream" / "emscripten"
+    llvm = pathlib.Path(os.environ["DOTNET_EMSCRIPTEN_LLVM_ROOT"]) if "DOTNET_EMSCRIPTEN_LLVM_ROOT" in os.environ else None
+    nm = str(llvm / "llvm-nm") if llvm else "llvm-nm"
+    lib_dir = pathlib.Path(os.environ["EM_CACHE"]) / "sysroot" / "lib" / "wasm32-emscripten"
+    # compiler-rt is libcompiler_rt*.a up to Emscripten 3, libclang_rt.builtins*.a later.
+    runtimes = sorted(lib_dir.glob("libcompiler_rt*.a")) + sorted(lib_dir.glob("libclang_rt.builtins*.a"))
+    if not runtimes:
+        sys.exit(f"No compiler-rt library in {lib_dir}")
+    symbols = subprocess.run([nm, str(runtimes[0])], check=True, text=True, capture_output=True).stdout
+    shim = out_dir / "libwasm_setjmp.a"
+    if " T __wasm_setjmp\n" in symbols:
+        shim.unlink(missing_ok=True)
+        return False
+    obj = out_dir / "wasm_setjmp.o"
+    run([str(emscripten / "emcc"), "-O3", "-msimd128", "-c", str(ROOT / "scripts" / "wasm" / "wasm_setjmp.c"), "-o", str(obj)])
+    shim.unlink(missing_ok=True)
+    run([str(emscripten / "emar"), "rcs", str(shim), str(obj)])
+    return True
+
+
 def gn_value(value):
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -158,10 +234,15 @@ def copy_headers(src, dest):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("os", choices=sorted(ARCHES))
-    parser.add_argument("arch", choices=["x64", "arm64"])
+    parser.add_argument("arch", choices=["x64", "arm64", "wasm32"])
     parser.add_argument("--tag", help="release tag (m<milestone>-<sha10>); read from the checkout when omitted")
     parser.add_argument("--skip-build", action="store_true", help="package an existing build")
+    parser.add_argument("--ndk", default=os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT"),
+                        help="Android NDK (default: ANDROID_NDK_HOME or ANDROID_NDK_ROOT)")
+    parser.add_argument("--emscripten", type=pathlib.Path, help="toolchain directory written by fetch-emscripten.py")
     args = parser.parse_args()
+    if args.arch not in ARCHES[args.os]:
+        sys.exit(f"{args.os} builds {', '.join(sorted(ARCHES[args.os]))}")
     if not (SKIA / "BUILD.gn").exists():
         sys.exit("No Skia checkout in ./skia: run scripts/fetch-skia.py first")
 
@@ -169,18 +250,40 @@ def main():
     milestone = next(int(l.split()[2]) for l in (SKIA / "include/core/SkMilestone.h").read_text().splitlines()
                      if l.startswith("#define SK_MILESTONE"))
     tag = args.tag or f"m{milestone}-{sha[:10]}"
-    config = f"Release-{args.os}-{args.arch}"
-    out_dir = SKIA / "out" / config
 
+    toolchain = {}
     gn_args = dict(COMMON_ARGS)
-    gn_args.update({"linux": linux_args, "macos": macos_args, "windows": windows_args}[args.os](args.arch))
+    targets = ["skia", "modules"]
+    platform = f"{args.os}-{args.arch}"
+    if args.os == "android":
+        if not args.ndk or not pathlib.Path(args.ndk).is_dir():
+            sys.exit("The Android build needs an NDK: pass --ndk or set ANDROID_NDK_HOME")
+        ndk = str(pathlib.Path(args.ndk).resolve())
+        gn_args.update(android_args(args.arch, ndk))
+        props = pathlib.Path(ndk, "source.properties").read_text()
+        revision = next((l.split("=", 1)[1].strip() for l in props.splitlines() if l.startswith("Pkg.Revision")), "")
+        toolchain = {"ndk": revision, "androidApi": ANDROID_API}
+    elif args.os == "wasm":
+        if args.emscripten is None:
+            sys.exit("The WebAssembly build needs --emscripten (a directory written by fetch-emscripten.py)")
+        toolchain = json.loads((args.emscripten / "toolchain.json").read_text())
+        os.environ.update(toolchain.pop("environment"))
+        gn_args.update(wasm_args(toolchain.pop("emsdkDir")))
+        targets = ["skia"] + MODULE_TARGETS
+        platform = f"wasm-emscripten-{toolchain['emscripten']}"
+    else:
+        gn_args.update({"linux": linux_args, "macos": macos_args, "windows": windows_args}[args.os](args.arch))
+    config = f"Release-{platform}"
+    out_dir = SKIA / "out" / config
     if not args.skip_build:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "args.gn").write_text("".join(f"{k} = {gn_value(v)}\n" for k, v in gn_args.items()))
         run([tool("gn"), "gen", str(out_dir)])
-        run([tool("ninja"), "-C", str(out_dir), "skia", "modules"])
+        run([tool("ninja"), "-C", str(out_dir)] + targets)
+    if args.os == "wasm":
+        toolchain["setjmpShim"] = wasm_setjmp_shim(gn_args["skia_emsdk_dir"], out_dir)
 
-    name = f"skia-{tag}-{args.os}-{args.arch}"
+    name = f"skia-{tag}-{platform}"
     stage = ARTIFACTS / name
     if stage.exists():
         shutil.rmtree(stage)
@@ -204,7 +307,9 @@ def main():
         "milestone": milestone,
         "os": args.os,
         "arch": args.arch,
+        "platform": platform,
         "config": config,
+        "toolchain": toolchain,
         "args": gn_args,
         "defines": found,
         "libraries": [lib.name for lib in libs],

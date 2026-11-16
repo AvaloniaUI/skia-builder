@@ -26,7 +26,7 @@ COMMON_DEPS = [
     "libjpeg-turbo", "libpng", "libwebp", "perfetto", "piex", "vulkanmemoryallocator", "vulkan-headers",
     "vulkan-utility-libraries", "wuffs", "zlib",
 ]
-OS_DEPS = {"linux": [], "macos": [], "windows": ["d3d12allocator", "spirv-cross"]}
+OS_DEPS = {"linux": [], "macos": [], "windows": ["d3d12allocator", "spirv-cross"], "android": [], "wasm": []}
 
 
 def run(args, cwd=None, env=None, capture=False):

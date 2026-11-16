@@ -17,6 +17,7 @@ permissions:
 
 env:
   SKIA_BUILDER_REPOSITORY: ${{ inputs.repository }}
+  ANDROID_NDK_VERSION: r27d
 
 jobs:
   resolve:
@@ -83,7 +84,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-${{ matrix.arch }}
+          name: skia-linux-${{ matrix.arch }}
           path: release/*.tar.gz
           if-no-files-found: error
           compression-level: 0
@@ -114,7 +115,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-${{ matrix.arch }}
+          name: skia-windows-${{ matrix.arch }}
           path: release/*.tar.gz
           if-no-files-found: error
           compression-level: 0
@@ -142,14 +143,72 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.arch }}
+          name: skia-macos-${{ matrix.arch }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  android:
+    name: Android ${{ matrix.arch }}
+    needs: resolve
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          add-to-path: false
+
+      - name: Fetch Skia
+        run: python3 scripts/fetch-skia.py --repository "$SKIA_BUILDER_REPOSITORY" --ref "${{ needs.resolve.outputs.sha }}" --os android
+
+      - name: Build
+        run: python3 scripts/build.py android ${{ matrix.arch }} --tag "${{ needs.resolve.outputs.tag }}" --ndk "${{ steps.ndk.outputs.ndk-path }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skia-android-${{ matrix.arch }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  wasm:
+    name: WebAssembly (.NET SDK ${{ matrix.sdk-band }})
+    needs: resolve
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # One build per Emscripten version: each .NET SDK band links with the Emscripten of its wasm-tools workload.
+        sdk-band: ["10.0.100", "11.0.100"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Skia
+        run: python3 scripts/fetch-skia.py --repository "$SKIA_BUILDER_REPOSITORY" --ref "${{ needs.resolve.outputs.sha }}" --os wasm
+
+      - name: Fetch the Emscripten of the .NET ${{ matrix.sdk-band }} wasm-tools workload
+        run: python3 scripts/fetch-emscripten.py --sdk-band ${{ matrix.sdk-band }}
+
+      - name: Build
+        run: python3 scripts/build.py wasm wasm32 --tag "${{ needs.resolve.outputs.tag }}" --emscripten "toolchains/emscripten-${{ matrix.sdk-band }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skia-wasm-${{ matrix.sdk-band }}
           path: release/*.tar.gz
           if-no-files-found: error
           compression-level: 0
 
   release:
     name: Release
-    needs: [resolve, linux, windows, macos]
+    needs: [resolve, linux, windows, macos, android, wasm]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -158,7 +217,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: "*-*64"
+          pattern: "skia-*"
           path: release
           merge-multiple: true
 
