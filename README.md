@@ -26,13 +26,14 @@ Each release has:
 
 ## Builds
 
-All builds are Release builds (`is_official_build`) with Skia's core, codecs, PDF, SVG, Skottie, skparagraph,
-skshaper and skunicode (ICU and HarfBuzz, built from Skia's third-party sources), Ganesh and Graphite.
+All builds are Release builds (`is_official_build`) with Skia's core, codecs, PDF, SVG, Skottie, skshaper (the
+primitive shaper, and CoreText on Apple platforms), Ganesh and Graphite. HarfBuzz and ICU are not built: there is no
+skparagraph, skunicode or HarfBuzz shaper, and PDF documents embed whole fonts.
 
 | OS | Compiler | GPU backends |
 |---|---|---|
 | Linux | Clang 20 with the gcc-11 libstdc++, on Ubuntu 20.04 (glibc 2.31) | GL, Vulkan; arm64 uses GLES and EGL |
-| Windows | clang-cl, static CRT (`/MT`); ICU data in `icudtl.dat`, loaded at run time from the directory of the executable or of the library that links Skia | GL, Vulkan, Direct3D |
+| Windows | clang-cl, static CRT (`/MT`) | GL, Vulkan, Direct3D |
 | macOS | Xcode Clang | GL, Metal |
 | Android | NDK r27d Clang, API level 24, the NDK's libc++ | GLES, Vulkan |
 | iOS, tvOS | Xcode Clang, iOS and tvOS 15.0; device arm64, simulator arm64 and x86_64 | Metal |
@@ -60,9 +61,6 @@ The archives link into .NET WebAssembly apps with the runtime's defaults:
 
 - `setjmp` and `longjmp` use WebAssembly exception handling (`-sSUPPORT_LONGJMP=wasm`), as .NET links with
   `-fwasm-exceptions`.
-- ICU symbols keep their version suffix (`ubrk_open_78`): `build.py` sets `U_DISABLE_RENAMING=0` in Skia's ICU and
-  skunicode build files for the build and restores them afterwards. The .NET runtime links its own ICU without
-  suffixes into the same module. `build-info.json` records `toolchain.icuRenaming`.
 
 The 10.0.100 packs pair a clang that lowers `setjmp` to `__wasm_setjmp` and `__wasm_setjmp_test` (LLVM 19) with
 Emscripten 3.1.56 system libraries that define only the older `saveSetjmp`. When the toolchain's compiler-rt lacks

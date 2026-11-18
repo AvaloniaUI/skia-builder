@@ -22,9 +22,8 @@ SKIA = ROOT / "skia"
 
 # The DEPS entries a build uses. Dawn, ANGLE, SwiftShader, V8, emsdk and the test tools are left out.
 COMMON_DEPS = [
-    "buildtools", "brotli", "delaunator-cpp", "dng_sdk", "expat", "freetype", "harfbuzz", "highway", "icu",
-    "libjpeg-turbo", "libpng", "libwebp", "perfetto", "piex", "vulkanmemoryallocator", "vulkan-headers",
-    "vulkan-utility-libraries", "wuffs", "zlib",
+    "buildtools", "brotli", "delaunator-cpp", "dng_sdk", "expat", "freetype", "highway", "libjpeg-turbo", "libpng",
+    "libwebp", "perfetto", "piex", "vulkanmemoryallocator", "vulkan-headers", "vulkan-utility-libraries", "wuffs", "zlib",
 ]
 OS_DEPS = {"linux": [], "macos": [], "windows": ["d3d12allocator", "spirv-cross"], "android": [], "wasm": [],
            "ios": [], "tvos": [], "maccatalyst": []}

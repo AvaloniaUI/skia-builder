@@ -13,7 +13,6 @@ defines.txt, and build-info.json.
 """
 
 import argparse
-import contextlib
 import json
 import os
 import pathlib
@@ -47,12 +46,11 @@ ANDROID_API = 24
 
 # The module libraries. The "modules" group also builds CanvasKit when is_canvaskit is set (WebAssembly).
 MODULE_TARGETS = [
-    "modules/bentleyottmann:bentleyottmann", "modules/skottie:skottie", "modules/skparagraph:skparagraph",
-    "modules/skshaper:skshaper", "modules/svg:svg",
+    "modules/bentleyottmann:bentleyottmann", "modules/skottie:skottie", "modules/skshaper:skshaper", "modules/svg:svg",
 ]
 
-# Libraries in the build: core, codecs, PDF, SVG, Skottie, paragraph, shaper and unicode (ICU and HarfBuzz),
-# Ganesh and Graphite (Vulkan or Metal; no Dawn).
+# Libraries in the build: core, codecs, PDF, SVG, Skottie and the shaper (primitive and CoreText), Ganesh and Graphite
+# (Vulkan or Metal; no Dawn). HarfBuzz and ICU are not built, so there is no skparagraph or skunicode.
 COMMON_ARGS = {
     "is_official_build": True,
     "is_debug": False,
@@ -64,12 +62,9 @@ COMMON_ARGS = {
     "skia_enable_pdf": True,
     "skia_enable_skottie": True,
     "skia_enable_svg": True,
-    "skia_use_icu": True,
-    "skia_use_harfbuzz": True,
-    "skia_pdf_subset_harfbuzz": True,
+    "skia_use_icu": False,
+    "skia_use_harfbuzz": False,
     "skia_use_system_expat": False,
-    "skia_use_system_harfbuzz": False,
-    "skia_use_system_icu": False,
     "skia_use_system_libjpeg_turbo": False,
     "skia_use_system_libpng": False,
     "skia_use_system_libwebp": False,
@@ -78,17 +73,15 @@ COMMON_ARGS = {
 
 # Targets whose defines a consumer compiles with (written to defines.txt).
 DEFINE_TARGETS = [
-    "//:skia", "//modules/skparagraph:skparagraph", "//modules/skottie:skottie", "//modules/svg:svg",
-    "//modules/skshaper:skshaper", "//modules/skunicode:skunicode_icu",
+    "//:skia", "//modules/skottie:skottie", "//modules/svg:svg", "//modules/skshaper:skshaper",
 ]
 
 DEFINE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(=\S*)?")
 
 # Headers outside include/, modules/ and src/ that public headers include.
 THIRD_PARTY_HEADERS = [
-    "third_party/icu", "third_party/externals/icu/source/common", "third_party/externals/icu/source/i18n",
-    "third_party/externals/harfbuzz/src", "third_party/externals/freetype/include", "third_party/externals/libpng",
-    "third_party/externals/zlib", "third_party/externals/libwebp/src",
+    "third_party/externals/freetype/include", "third_party/externals/libpng", "third_party/externals/zlib",
+    "third_party/externals/libwebp/src",
 ]
 
 
@@ -212,32 +205,6 @@ def apple_args(slice_os, arch):
     for key in ("extra_cflags", "extra_asmflags", "extra_ldflags"):
         args[key].append(version)
     return args
-
-
-# WebAssembly builds keep ICU's version suffix on symbol names (ubrk_open_78), so Skia's ICU does not clash with the
-# .NET runtime's ICU, which is linked into the same module without suffixes.
-ICU_RENAMING = [
-    ("third_party/icu/BUILD.gn", '"U_DISABLE_RENAMING=1",', '"U_DISABLE_RENAMING=0",'),
-    ("modules/skunicode/BUILD.gn", 'defines += [ "U_DISABLE_RENAMING=1" ]', 'defines += [ "U_DISABLE_RENAMING=0" ]'),
-]
-
-
-@contextlib.contextmanager
-def icu_renaming():
-    """Applies ICU_RENAMING to the checkout for the duration of a build."""
-    originals = {}
-    try:
-        for path, old, new in ICU_RENAMING:
-            file = SKIA / path
-            originals.setdefault(file, file.read_text())
-            current = file.read_text()
-            if old not in current:
-                sys.exit(f"{path} no longer contains {old}")
-            file.write_text(current.replace(old, new))
-        yield
-    finally:
-        for file, text in originals.items():
-            file.write_text(text)
 
 
 def wasm_setjmp_shim(emsdk_dir, out_dir):
@@ -376,12 +343,10 @@ def main():
     if not args.skip_build:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "args.gn").write_text("".join(f"{k} = {gn_value(v)}\n" for k, v in gn_args.items()))
-        with icu_renaming() if args.os == "wasm" else contextlib.nullcontext():
-            run([tool("gn"), "gen", str(out_dir)])
-            run([tool("ninja"), "-C", str(out_dir)] + targets)
+        run([tool("gn"), "gen", str(out_dir)])
+        run([tool("ninja"), "-C", str(out_dir)] + targets)
     if args.os == "wasm":
         toolchain["setjmpShim"] = wasm_setjmp_shim(gn_args["skia_emsdk_dir"], out_dir)
-        toolchain["icuRenaming"] = True
 
     name = f"skia-{tag}-{platform}"
     stage = ARTIFACTS / name
@@ -398,9 +363,6 @@ def main():
         sys.exit(f"No static libraries in {out_dir}")
     for lib in libs:
         shutil.copy2(lib, lib_dir / lib.name)
-    # Windows builds load ICU's data at run time from icudtl.dat next to the executable or library (SkLoadICU).
-    if (out_dir / "icudtl.dat").exists():
-        shutil.copy2(out_dir / "icudtl.dat", lib_dir / "icudtl.dat")
     shutil.copy2(out_dir / "args.gn", lib_dir / "args.gn")
     found = defines(out_dir)
     (lib_dir / "defines.txt").write_text("".join(f"-D{d}\n" for d in found))
