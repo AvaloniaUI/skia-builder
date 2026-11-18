@@ -60,7 +60,10 @@ WebAssembly threads need a separate build.
 The archives link into .NET WebAssembly apps with the runtime's defaults:
 
 - `setjmp` and `longjmp` use WebAssembly exception handling (`-sSUPPORT_LONGJMP=wasm`), as .NET links with
-  `-fwasm-exceptions`.
+  `-fwasm-exceptions`. .NET 11 and later bands link with the standard exception handling instructions
+  (`-sWASM_LEGACY_EXCEPTIONS=0`), earlier bands with the legacy ones; a module cannot mix them, so the archives of each
+  band use that band's instructions. `build.py` checks the libraries for the other kind and records
+  `toolchain.standardExceptions` in `build-info.json`.
 
 The 10.0.100 packs pair a clang that lowers `setjmp` to `__wasm_setjmp` and `__wasm_setjmp_test` (LLVM 19) with
 Emscripten 3.1.56 system libraries that define only the older `saveSetjmp`. When the toolchain's compiler-rt lacks

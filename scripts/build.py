@@ -143,7 +143,16 @@ def android_args(arch, ndk):
     }
 
 
-def wasm_args(emsdk_dir):
+# .NET SDK bands from 11 link WebAssembly apps with the standard exception handling instructions
+# (-sWASM_LEGACY_EXCEPTIONS=0); earlier bands use the legacy ones. A module cannot mix them.
+STANDARD_EXCEPTIONS_BAND = 11
+
+
+def standard_exceptions(sdk_band):
+    return int(sdk_band.split(".")[0]) >= STANDARD_EXCEPTIONS_BAND
+
+
+def wasm_args(emsdk_dir, sdk_band):
     # is_canvaskit selects Skia's plain wasm configuration: no forced -pthread and no emsdk sysroot or activation,
     # so the objects link into single-threaded hosts with the toolchain's own system libraries.
     return {
@@ -166,7 +175,8 @@ def wasm_args(emsdk_dir):
         "skia_use_lua": False,
         # .NET links WebAssembly apps with WebAssembly exception handling (-fwasm-exceptions), so setjmp and longjmp
         # use it too; Emscripten's JavaScript longjmp is not linked there.
-        "extra_cflags": ["-msimd128", "-sSUPPORT_LONGJMP=wasm", "-ffunction-sections", "-fdata-sections"],
+        "extra_cflags": ["-msimd128", "-sSUPPORT_LONGJMP=wasm", "-ffunction-sections", "-fdata-sections"]
+                        + (["-sWASM_LEGACY_EXCEPTIONS=0"] if standard_exceptions(sdk_band) else []),
         "extra_cflags_cc": ["-fno-exceptions", "-fno-rtti"],
     }
 
@@ -205,6 +215,21 @@ def apple_args(slice_os, arch):
     for key in ("extra_cflags", "extra_asmflags", "extra_ldflags"):
         args[key].append(version)
     return args
+
+
+LEGACY_EH = re.compile(r"^\s+[0-9a-f]+:.*\s(try|catch|catch_all|delegate|rethrow)\b", re.MULTILINE)
+STANDARD_EH = re.compile(r"\s(try_table|throw_ref)\b")
+
+
+def check_exceptions(out_dir, sdk_band):
+    """Fails when a library uses the exception handling instructions that the band's .NET apps do not link with."""
+    llvm = pathlib.Path(os.environ["DOTNET_EMSCRIPTEN_LLVM_ROOT"])
+    wrong, kind = (LEGACY_EH, "legacy") if standard_exceptions(sdk_band) else (STANDARD_EH, "standard")
+    for lib in sorted(out_dir.glob("*.a")):
+        text = subprocess.run([str(llvm / "llvm-objdump"), "-d", str(lib)], check=True, text=True,
+                              capture_output=True).stdout
+        if wrong.search(text):
+            sys.exit(f"{lib.name} uses {kind} exception handling instructions; .NET {sdk_band} apps cannot link it")
 
 
 def wasm_setjmp_shim(emsdk_dir, out_dir):
@@ -330,7 +355,7 @@ def main():
             sys.exit("The WebAssembly build needs --emscripten (a directory written by fetch-emscripten.py)")
         toolchain = json.loads((args.emscripten / "toolchain.json").read_text())
         os.environ.update(toolchain.pop("environment"))
-        gn_args.update(wasm_args(toolchain.pop("emsdkDir")))
+        gn_args.update(wasm_args(toolchain.pop("emsdkDir"), toolchain["sdkBand"]))
         targets = ["skia"] + MODULE_TARGETS
         platform = f"wasm-emscripten-{toolchain['emscripten']}"
     elif args.os in ("ios", "ios-simulator", "tvos", "tvos-simulator", "maccatalyst"):
@@ -347,6 +372,8 @@ def main():
         run([tool("ninja"), "-C", str(out_dir)] + targets)
     if args.os == "wasm":
         toolchain["setjmpShim"] = wasm_setjmp_shim(gn_args["skia_emsdk_dir"], out_dir)
+        check_exceptions(out_dir, toolchain["sdkBand"])
+        toolchain["standardExceptions"] = standard_exceptions(toolchain["sdkBand"])
 
     name = f"skia-{tag}-{platform}"
     stage = ARTIFACTS / name
